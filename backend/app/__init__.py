@@ -1,0 +1,1 @@
+"""ClosedAI backend application package."""
