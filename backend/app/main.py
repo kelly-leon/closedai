@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.api_documents import router as documents_router
+from app.api_chat import router as chat_router
 from app.config import get_settings
 from app.db.models import User
 from app.db.session import get_engine
@@ -19,6 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(documents_router)
+app.include_router(chat_router)
 
 
 @app.on_event("startup")

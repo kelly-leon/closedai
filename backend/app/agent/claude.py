@@ -1,4 +1,8 @@
-"""Claude agent placeholder."""
+"""Anthropic-backed retrieval agent compatibility wrapper."""
+
+from uuid import UUID
+
+from app.agent.agent import RetrievalAgent
 
 
 class ClaudeAgent:
@@ -8,7 +12,7 @@ class ClaudeAgent:
         """Initialize an agent with its Anthropic API key."""
         self.api_key = api_key
 
-    def answer(self, user_id: str, question: str) -> str:
+    def answer(self, user_id: str | UUID, question: str) -> str:
         """Answer a question using files available to the user."""
-        # TODO: Run Claude with the document search tool.
-        raise NotImplementedError
+        answer, _sources = RetrievalAgent().answer(user_id, question)
+        return answer

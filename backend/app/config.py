@@ -2,10 +2,10 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -22,18 +22,23 @@ class Settings(BaseSettings):
     embedding_provider: Literal["local", "voyage", "openai"] = "local"
     database_url: str = "postgresql+psycopg://closedai:closedai@localhost:5432/closedai"
     anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-5-20250929"
+    top_k: int = 6
+    similarity_threshold: float = 0.2
+    max_tool_rounds: int = 5
+    chat_history_limit: int = 20
     embedding_dim: int = 384
     embedding_batch_size: int = 32
     upload_dir: str = "./uploads"
     supabase_bucket: str = "documents"
     max_file_size_mb: int = 50
-    allowed_extensions: list[str] = Field(default_factory=lambda: ["pdf", "docx", "txt", "md"])
+    allowed_extensions: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["pdf", "docx", "txt", "md"])
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     voyage_api_key: str = ""
     voyage_embedding_model: str = "voyage-2"
     local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:3000"])
     supabase_url: str = ""
     supabase_jwt_secret: str = ""
     supabase_service_key: str = ""
