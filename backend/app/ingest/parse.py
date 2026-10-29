@@ -2,9 +2,14 @@
 
 from io import BytesIO
 from pathlib import Path
+import logging
 
 from docx import Document
 from pypdf import PdfReader
+
+logging.getLogger("pypdf").setLevel(logging.ERROR)
+
+SCANNED_PDF_MESSAGE = "This looks like a scanned document. Text extraction is not supported yet."
 
 
 def parse_document(filename: str, content: bytes) -> list[tuple[int | None, str]]:
@@ -13,8 +18,8 @@ def parse_document(filename: str, content: bytes) -> list[tuple[int | None, str]
     if suffix == "pdf":
         pages = [(index, (page.extract_text() or "").strip()) for index, page in enumerate(PdfReader(BytesIO(content)).pages, start=1)]
         text = "\n".join(page_text for _, page_text in pages if page_text)
-        if not text.strip():
-            raise ValueError("PDF contains no extractable text; scanned PDFs are not supported")
+        if len("".join(text.split())) < 50:
+            raise ValueError(SCANNED_PDF_MESSAGE)
         return [(page, page_text) for page, page_text in pages if page_text]
     if suffix == "docx":
         document = Document(BytesIO(content))

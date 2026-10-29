@@ -32,10 +32,21 @@ bearer = HTTPBearer(auto_error=False)
 
 async def current_chat_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)) -> UUID:
     """Resolve and provision the current request user."""
-    user_id = UUID(get_auth_provider().get_user_id(credentials))
+    provider = get_auth_provider()
+    claims = provider.get_claims(credentials)
+    user_id = UUID(provider.get_user_id(credentials))
     if db.get(User, user_id) is None:
-        db.add(User(id=user_id))
-        db.commit()
+        db.add(User(id=user_id, email=str(claims.get("email")) if claims.get("email") else None))
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            user = db.get(User, user_id)
+            if user is None:
+                raise
+            if user.email is None and claims.get("email"):
+                user.email = str(claims["email"])
+                db.commit()
     return user_id
 
 
@@ -107,6 +118,7 @@ def chat(payload: ChatRequest, user_id: UUID = Depends(current_chat_user), db: S
     def generate() -> Iterator[str]:
         assistant_text = ""
         completed = False
+        terminal = False
         started = time.monotonic()
         try:
             agent = RetrievalAgent()
@@ -121,22 +133,25 @@ def chat(payload: ChatRequest, user_id: UUID = Depends(current_chat_user), db: S
                 yield _event("token", {"text": token})
             sources = _sources(getattr(agent, "sources", []))
             yield _event("sources", sources)
-            yield _event("done", {"conversation_id": str(conversation.id), "sources": sources})
-            completed = True
             db.add(Message(conversation_id=conversation.id, role="assistant", content=assistant_text, sources=sources))
             db.commit()
             count_message(db, user_id)
+            yield _event("done", {"conversation_id": str(conversation.id), "sources": sources})
+            completed = True
+            terminal = True
         except TimeoutError:
             completed = True
             yield _event("error", {"message": "That took a little too long. Please try again with a shorter question."})
             yield _event("done", {"conversation_id": str(conversation.id)})
+            terminal = True
         except Exception as exc:
             logger.exception("Chat request failed for user %s", user_id)
             completed = True
             yield _event("error", {"message": _safe_error(exc)})
             yield _event("done", {"conversation_id": str(conversation.id)})
+            terminal = True
         finally:
-            if not completed:
+            if not terminal:
                 yield _event("done", {"conversation_id": str(conversation.id)})
 
     return StreamingResponse(generate(), media_type="text/event-stream")

@@ -23,11 +23,22 @@ bearer = HTTPBearer(auto_error=False)
 
 async def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)) -> UUID:
     """Resolve and provision the authenticated database user."""
-    user_id = UUID(get_auth_provider().get_user_id(credentials))
+    provider = get_auth_provider()
+    claims = provider.get_claims(credentials)
+    user_id = UUID(provider.get_user_id(credentials))
     user = db.get(User, user_id)
     if user is None:
-        db.add(User(id=user_id))
-        db.commit()
+        db.add(User(id=user_id, email=str(claims.get("email")) if claims.get("email") else None))
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            user = db.get(User, user_id)
+            if user is None:
+                raise
+            if user.email is None and claims.get("email"):
+                user.email = str(claims["email"])
+                db.commit()
     return user_id
 
 
@@ -95,7 +106,7 @@ def list_documents(unit_id: UUID, user_id: UUID = Depends(current_user), db: Ses
     if db.scalar(select(Unit).where(Unit.id == unit_id, Unit.user_id == user_id)) is None:
         raise HTTPException(status_code=404, detail="Unit not found")
     documents = db.scalars(select(Document).where(Document.user_id == user_id, Document.unit_id == unit_id).order_by(Document.created_at.desc())).all()
-    return [{"id": str(document.id), "filename": document.filename, "status": document.status} for document in documents]
+    return [{"id": str(document.id), "filename": document.filename, "status": document.status, "error_message": document.error_message} for document in documents]
 
 
 @router.get("/{document_id}")
@@ -105,6 +116,21 @@ def document_details(document_id: UUID, user_id: UUID = Depends(current_user), d
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"id": str(document.id), "filename": document.filename, "mime_type": document.mime_type, "size_bytes": document.size_bytes, "status": document.status, "error_message": document.error_message, "created_at": document.created_at.isoformat()}
+
+
+@router.post("/{document_id}/retry", status_code=202)
+def retry_document(document_id: UUID, background_tasks: BackgroundTasks, user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, str]:
+    """Reset a failed owned document and queue it for ingestion again."""
+    document = db.scalar(select(Document).where(Document.id == document_id, Document.user_id == user_id))
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if document.status != "failed":
+        raise HTTPException(status_code=409, detail="Only failed documents can be retried")
+    document.status = "pending"
+    document.error_message = None
+    db.commit()
+    background_tasks.add_task(ingest_document, document_id, user_id)
+    return {"id": str(document_id), "status": "pending"}
 
 
 @router.delete("/{document_id}", status_code=204)

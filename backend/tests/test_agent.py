@@ -24,12 +24,13 @@ class MockClient:
 def test_agent_executes_tool_with_authenticated_user(monkeypatch) -> None:
     seen = []
 
-    def fake_search(user_id, query, top_k=None):
+    def fake_search(user_id, query, top_k=None, unit_id=None):
         seen.append((str(user_id), query))
+        assert str(unit_id) == "00000000-0000-0000-0000-000000000002"
         return [{"content": "Allowed policy", "document_id": "d", "filename": "policy.pdf", "page_number": 3, "similarity": 0.9}]
 
     monkeypatch.setattr(agent_module, "search_chunks", fake_search)
-    answer, sources = agent_module.run_agent_loop(MockClient(), "00000000-0000-0000-0000-000000000001", "What is the policy?", [])
+    answer, sources = agent_module.run_agent_loop(MockClient(), "00000000-0000-0000-0000-000000000001", "What is the policy?", [], unit_id="00000000-0000-0000-0000-000000000002")
     assert answer == "Found in the policy."
     assert seen == [("00000000-0000-0000-0000-000000000001", "policy")]
     assert sources[0]["filename"] == "policy.pdf"
@@ -58,8 +59,9 @@ class FollowUpClient:
 def test_follow_up_expound_on_each_uses_specific_prior_items(monkeypatch) -> None:
     seen = []
 
-    def fake_search(user_id, query, top_k=None):
+    def fake_search(user_id, query, top_k=None, unit_id=None):
         seen.append(query)
+        assert str(unit_id) == "00000000-0000-0000-0000-000000000002"
         return [{"content": query, "document_id": "d", "filename": "normalization.pdf", "page_number": 7, "similarity": 0.8}]
 
     monkeypatch.setattr(agent_module, "search_chunks", fake_search)
@@ -67,7 +69,22 @@ def test_follow_up_expound_on_each_uses_specific_prior_items(monkeypatch) -> Non
         {"role": "user", "content": "Summarize database normalization."},
         {"role": "assistant", "content": "The key items are 1NF, 2NF, and 3NF."},
     ]
-    answer, sources = agent_module.run_agent_loop(FollowUpClient(), "00000000-0000-0000-0000-000000000001", "please expound on each", history)
+    answer, sources = agent_module.run_agent_loop(FollowUpClient(), "00000000-0000-0000-0000-000000000001", "please expound on each", history, unit_id="00000000-0000-0000-0000-000000000002")
     assert answer == "Here is more detail on each normal form."
     assert seen == ["1NF definition normalization", "2NF definition normalization", "3NF definition normalization"]
     assert sources
+
+
+def test_agent_stream_emits_status_and_answer(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_module.RetrievalAgent,
+        "answer",
+        lambda self, user_id, message, history=None, unit_id=None: ("Answer complete", []),
+    )
+    events = list(agent_module.RetrievalAgent(client=object()).answer_stream(
+        "00000000-0000-0000-0000-000000000001",
+        "hello",
+        unit_id="00000000-0000-0000-0000-000000000002",
+    ))
+    assert events[0] == {"type": "status", "text": "Searching your notes..."}
+    assert events[-1] == "Answer complete"

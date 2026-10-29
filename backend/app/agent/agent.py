@@ -51,7 +51,11 @@ class RetrievalAgent:
 
     def answer(self, user_id: UUID | str, message: str, history: list[dict[str, str]] | None = None, unit_id: UUID | str | None = None) -> tuple[str, list[dict[str, Any]]]:
         """Answer a message and return the final text and retrieved source chunks."""
-        messages = list(history or []) + [{"role": "user", "content": message}]
+        if unit_id is None:
+            raise ValueError("unit_id is required for document search")
+        settings = get_settings()
+        recent_history = list(history or [])[-settings.chat_history_limit:]
+        messages = recent_history + [{"role": "user", "content": message}]
         sources: list[dict[str, Any]] = []
         started = time.monotonic()
         for _round in range(self.settings.max_tool_rounds + 1):
@@ -75,7 +79,7 @@ class RetrievalAgent:
                 tool_id = _value(block, "id")
                 query = _value(_value(block, "input", {}), "query", "")
                 logger.info("search_documents tool call: user=%s query=%r", user_id, query)
-                matches = search_chunks(user_id, query) if unit_id is None else search_chunks(user_id, query, unit_id=unit_id)
+                matches = search_chunks(user_id, query, unit_id=unit_id)
                 logger.info("search_documents result: user=%s query=%r count=%d", user_id, query, len(matches))
                 for match in matches:
                     if match not in sources:

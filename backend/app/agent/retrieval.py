@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 def search_chunks(user_id: UUID | str, query: str, top_k: int | None = None, unit_id: UUID | str | None = None) -> list[dict[str, Any]]:
     """Return relevant chunks owned by the user above the similarity threshold."""
+    if unit_id is None:
+        raise ValueError("unit_id is required for document search")
     settings = get_settings()
     limit = settings.top_k if top_k is None else top_k
     user = UUID(str(user_id))
@@ -33,8 +35,7 @@ def search_chunks(user_id: UUID | str, query: str, top_k: int | None = None, uni
             .order_by(similarity.desc())
             .limit(limit)
         )
-        if unit is not None:
-            statement = statement.where(Chunk.unit_id == unit, Document.unit_id == unit)
+        statement = statement.where(Chunk.unit_id == unit, Document.unit_id == unit)
         rows = db.execute(statement).all()
         results = []
         all_rows = []

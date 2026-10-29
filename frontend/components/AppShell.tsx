@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, ConversationSummary, Unit, Usage } from "../lib/api";
+import { supabase, supabaseAuthEnabled } from "../lib/supabase";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -14,8 +15,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [unitId, setUnitId] = useState("");
   const [usage, setUsage] = useState<Usage | null>(null);
   const [redeemCode, setRedeemCode] = useState("");
+  const [userEmail, setUserEmail] = useState("");
   const pathname = usePathname();
   const router = useRouter();
+  const authPage = ["/login", "/signup", "/forgot-password", "/auth/reset"].includes(pathname);
 
   async function load() {
     if (!unitId) return;
@@ -24,6 +27,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
   useEffect(() => { void load(); }, [pathname]);
   useEffect(() => {
+    if (authPage) return;
+    if (supabase) void supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? ""));
     setCollapsed(window.localStorage.getItem("closedai-sidebar-collapsed") === "true");
     void api.units().then(items => {
       setUnits(items);
@@ -39,6 +44,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.addEventListener("closedai:conversation-created", refresh);
     return () => window.removeEventListener("closedai:conversation-created", refresh);
   }, []);
+
+  if (authPage) return <>{children}</>;
 
   useEffect(() => {
     if (!unitId) return;
@@ -131,6 +138,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <p className="font-semibold text-amber-100">Redeem a code to continue</p>
           <p className="mt-1 text-slate-300">{process.env.NEXT_PUBLIC_UPGRADE_TEXT || "Contact support for an upgrade code."}</p>
           <div className="mt-2 flex gap-1"><input value={redeemCode} onChange={event => setRedeemCode(event.target.value)} className="min-w-0 flex-1 rounded bg-slate-950 px-2 py-1" placeholder="ABCD-EFGH-JKLM" /><button onClick={() => void redeem()} className="rounded bg-white px-2 text-slate-950">Redeem</button></div>
+        </div>}
+        {supabaseAuthEnabled && !rail && <div className="shrink-0 border-t border-white/10 p-3 text-xs">
+          <Link href="/#usage" className="block truncate text-slate-300 hover:text-white">Usage · {usage ? usage.plan : ""}</Link>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="truncate text-slate-200">{userEmail}</span>
+            <button onClick={async () => { await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
+          </div>
         </div>}
       </div>}
     </aside>

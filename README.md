@@ -16,6 +16,10 @@ npm run dev
 
 Set `NEXT_PUBLIC_API_URL=http://localhost:8000` in `.env` to point the frontend at the backend. Docker Compose passes the same variable to the frontend service.
 
+For hosted Supabase authentication, set `MODE=hosted`, `AUTH_PROVIDER=supabase`, `SUPABASE_URL=https://your-project.supabase.co`, and the optional asymmetric/shared JWT settings. In the frontend, set `NEXT_PUBLIC_AUTH_MODE=supabase` and provide `NEXT_PUBLIC_SUPABASE_URL` and the public `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Never configure the Supabase service-role key in the frontend. Google sign-in is optional through `NEXT_PUBLIC_GOOGLE_AUTH=true`.
+
+Pre-existing selfhosted documents and chats belong to the fixed selfhosted default user and are not migrated or shared with Supabase users. Each Supabase user starts with their own private data.
+
 ## Embedding configuration
 
 `EMBEDDING_DIM` controls the pgvector column size and defaults to 384 for the local `sentence-transformers/all-MiniLM-L6-v2` model. Changing embedding providers or models can change vector dimensions and semantics; **all existing document chunks must be re-embedded and the pgvector column migrated before changing providers in production**.

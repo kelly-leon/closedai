@@ -16,6 +16,8 @@ class FakeDB:
         sql = str(statement)
         assert "chunks.user_id" in sql
         assert "documents.user_id" in sql
+        assert "chunks.unit_id" in sql
+        assert "documents.unit_id" in sql
         return SimpleNamespace(all=lambda: [SimpleNamespace(content="text", document_id=UUID(int=1), filename="a.pdf", page_number=2, similarity=0.8)])
 
     def close(self) -> None:
@@ -29,5 +31,5 @@ def test_search_chunks_filters_by_user(monkeypatch) -> None:
 
     monkeypatch.setattr(retrieval, "get_embedding_provider", lambda: FakeEmbedding())
     monkeypatch.setattr(retrieval, "get_db", lambda: iter([FakeDB()]))
-    results = retrieval.search_chunks(UUID(int=2), "query")
+    results = retrieval.search_chunks(UUID(int=2), "query", unit_id=UUID(int=3))
     assert results[0]["filename"] == "a.pdf"

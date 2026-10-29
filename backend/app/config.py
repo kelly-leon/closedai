@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     chat_history_limit: int = 20
     embedding_dim: int = 384
     embedding_batch_size: int = 32
+    ingest_timeout_seconds: int = 600
     upload_dir: str = "./uploads"
     supabase_bucket: str = "documents"
     max_file_size_mb: int = 50

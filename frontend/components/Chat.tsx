@@ -136,6 +136,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
     setThinking(true);
     setMessages(current => [...current, { id: crypto.randomUUID(), role: "user", content: message, sources: null }, { id: crypto.randomUUID(), role: "assistant", content: "", sources: null }]);
     const abort = new AbortController(); controller.current = abort;
+    let terminal = false;
     try {
       const unitId = window.localStorage.getItem("closedai-unit-id");
       if (!unitId) throw new Error("Select a unit before chatting.");
@@ -161,6 +162,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
           if (eventName === "status") { setThinking(true); setWorkingStatus(typeof record.text === "string" ? record.text : "Searching your notes..."); }
           if (eventName === "sources") setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, sources: data as Source[] } : item));
           if (eventName === "done" && typeof record.conversation_id === "string") {
+            terminal = true;
             setActiveConversation(record.conversation_id);
             if (!activeConversation) {
               window.dispatchEvent(new CustomEvent("closedai:conversation-created", { detail: { id: record.conversation_id, title: message.trim().slice(0, 60) || "New conversation", created_at: new Date().toISOString() } }));
@@ -169,11 +171,13 @@ export function Chat({ conversationId }: { conversationId?: string }) {
           }
           if (eventName === "error") {
             const message = typeof record.message === "string" ? record.message : "The chat request failed.";
-            throw new Error(message);
+            terminal = true;
+            setError(`I couldn't complete that: ${message}`);
           }
         }
         if (done) break;
       }
+      if (!terminal) setError("The chat connection ended unexpectedly. Please try again.");
     } catch (caught) {
       if (!(caught instanceof DOMException && caught.name === "AbortError")) {
         const detail = caught instanceof Error ? caught.message : "";
