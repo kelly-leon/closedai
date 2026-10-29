@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-4-5-20250929"
     top_k: int = 6
     similarity_threshold: float = 0.2
-    max_tool_rounds: int = 5
+    max_tool_rounds: int = 6
     chat_history_limit: int = 20
     embedding_dim: int = 384
     embedding_batch_size: int = 32
@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_price_id: str = ""
+    trial_messages: int = 20
+    trial_documents: int = 3
+    admin_api_key: str = ""
 
     @field_validator("cors_origins", mode="before")
     @classmethod

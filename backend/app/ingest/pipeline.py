@@ -45,7 +45,7 @@ def ingest_document(document_id: UUID, user_id: UUID) -> None:
                 batch = texts[start:start + settings.embedding_batch_size]
                 vectors.extend(embeddings.embed_documents(batch))
                 logger.info("Embedded chunks %s-%s for document %s", start, start + len(batch), document_id)
-            db.add_all([Chunk(document_id=document_id, user_id=user_id, chunk_index=index, content=text, page_number=page, embedding=vector) for index, (page, text), vector in zip(range(len(chunks)), chunks, vectors)])
+            db.add_all([Chunk(document_id=document_id, user_id=user_id, unit_id=document.unit_id, chunk_index=index, content=text, page_number=page, embedding=vector) for index, (page, text), vector in zip(range(len(chunks)), chunks, vectors)])
             document.status = "ready"
             db.commit()
         except Exception as exc:

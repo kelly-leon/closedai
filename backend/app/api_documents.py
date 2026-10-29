@@ -11,10 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.auth.factory import get_auth_provider
 from app.config import get_settings
-from app.db.models import Chunk, Document, User
+from app.db.models import Chunk, Document, Unit, User
 from app.db.session import get_db
 from app.ingest.pipeline import ingest_document
 from app.storage.factory import get_storage_provider
+from app.usage import check_limit
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 bearer = HTTPBearer(auto_error=False)
@@ -37,6 +38,7 @@ class DocumentRegistration(BaseModel):
     filename: str
     mime_type: str
     size_bytes: int
+    unit_id: UUID
 
 
 def _validate_file(filename: str, size_bytes: int) -> str:
@@ -50,17 +52,20 @@ def _validate_file(filename: str, size_bytes: int) -> str:
 
 
 @router.post("", status_code=202)
-async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...), user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, str]:
+async def upload_document(background_tasks: BackgroundTasks, unit_id: UUID, file: UploadFile = File(...), user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, str]:
     """Upload and ingest a document in self-hosted mode."""
     settings = get_settings()
     if settings.mode != "selfhosted":
         raise HTTPException(status_code=404, detail="Use the document register endpoint in hosted mode")
+    if db.scalar(select(Unit).where(Unit.id == unit_id, Unit.user_id == user_id)) is None:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    check_limit(db, user_id, "documents")
     content = await file.read()
     _validate_file(file.filename or "", len(content))
     document_id = uuid4()
     storage_path = f"{user_id}/{document_id}/{file.filename}"
     get_storage_provider().save(storage_path, content)
-    document = Document(id=document_id, user_id=user_id, filename=file.filename or "upload", mime_type=file.content_type or "application/octet-stream", size_bytes=len(content), storage_path=storage_path, status="pending")
+    document = Document(id=document_id, user_id=user_id, unit_id=unit_id, filename=file.filename or "upload", mime_type=file.content_type or "application/octet-stream", size_bytes=len(content), storage_path=storage_path, status="pending")
     db.add(document)
     db.commit()
     background_tasks.add_task(ingest_document, document_id, user_id)
@@ -73,8 +78,11 @@ async def register_document(payload: DocumentRegistration, background_tasks: Bac
     if get_settings().mode != "hosted":
         raise HTTPException(status_code=404, detail="Registration is only available in hosted mode")
     _validate_file(payload.filename, payload.size_bytes)
+    if db.scalar(select(Unit).where(Unit.id == payload.unit_id, Unit.user_id == user_id)) is None:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    check_limit(db, user_id, "documents")
     document_id = uuid4()
-    document = Document(id=document_id, user_id=user_id, filename=payload.filename, mime_type=payload.mime_type, size_bytes=payload.size_bytes, storage_path=payload.storage_path, status="pending")
+    document = Document(id=document_id, user_id=user_id, unit_id=payload.unit_id, filename=payload.filename, mime_type=payload.mime_type, size_bytes=payload.size_bytes, storage_path=payload.storage_path, status="pending")
     db.add(document)
     db.commit()
     background_tasks.add_task(ingest_document, document_id, user_id)
@@ -82,9 +90,11 @@ async def register_document(payload: DocumentRegistration, background_tasks: Bac
 
 
 @router.get("")
-def list_documents(user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) -> list[dict[str, object]]:
+def list_documents(unit_id: UUID, user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) -> list[dict[str, object]]:
     """List documents owned by the current user."""
-    documents = db.scalars(select(Document).where(Document.user_id == user_id).order_by(Document.created_at.desc())).all()
+    if db.scalar(select(Unit).where(Unit.id == unit_id, Unit.user_id == user_id)) is None:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    documents = db.scalars(select(Document).where(Document.user_id == user_id, Document.unit_id == unit_id).order_by(Document.created_at.desc())).all()
     return [{"id": str(document.id), "filename": document.filename, "status": document.status} for document in documents]
 
 

@@ -2,8 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body {
-  margin: 0;
-  min-height: 100%;
-}
+html, body { margin: 0; height: 100%; }
+body { background: #05070d; color: #e8ecf4; }
+.space-gradient { background: radial-gradient(circle at 72% 18%, rgba(41, 86, 170, .08), transparent 27%), linear-gradient(180deg, #05070d 0%, #070b16 58%, #0a0f1c 100%); }
+.space-stars-small { opacity: .38; background-image: radial-gradient(circle, rgba(232,236,244,.75) 0 .65px, transparent .85px); background-size: 58px 58px; }
+.space-stars-medium { opacity: .32; background-image: radial-gradient(circle, rgba(190,218,255,.65) 0 .65px, transparent 1px); background-size: 185px 185px; background-position: 31px 19px; }
+.space-stars-bright { opacity: .5; animation: starTwinkle 5s ease-in-out infinite alternate; background-image: radial-gradient(circle, rgba(255,255,255,.85) 0 .8px, rgba(130,190,255,.45) 1px, transparent 1.8px); background-size: 330px 330px; background-position: 71px 43px; }
+.content-shade { background: linear-gradient(90deg, rgba(5,7,13,.9) 0%, rgba(5,7,13,.55) 24%, rgba(5,7,13,.55) 76%, rgba(5,7,13,.9) 100%), linear-gradient(180deg, rgba(5,7,13,.18), rgba(5,7,13,.82)); }
+.earth-haze { position: absolute; left: -20%; right: -20%; bottom: 7%; height: 7%; opacity: .35; background: radial-gradient(ellipse at 50% 100%, rgba(45,159,255,.12), rgba(12,92,184,.03) 45%, transparent 68%); filter: blur(22px); }
+.earth-horizon { position: absolute; width: 160vw; aspect-ratio: 1; left: -30vw; bottom: calc(8vh - 160vw); opacity: .25; border-radius: 50%; background: radial-gradient(circle at 50% 35%, #063f85 0%, #07346d 28%, #061d43 58%, #020713 78%); box-shadow: 0 -2px 7px rgba(105,210,255,.28), 0 -8px 18px rgba(30,132,255,.12); }
+@keyframes starTwinkle { from { opacity: .45; } to { opacity: .95; } }
+@media (prefers-reduced-motion: reduce) { .space-stars-bright { animation: none; } }
+[data-status="ready"] { background: rgba(22,101,52,.9); color: #e8ecf4; }
+[data-status="pending"], [data-status="processing"] { background: rgba(146,64,14,.92); color: #fff7ed; }
+[data-status="failed"] { background: rgba(153,27,27,.92); color: #e8ecf4; }

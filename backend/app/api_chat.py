@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Iterator
 from uuid import UUID, uuid4
@@ -15,8 +16,9 @@ from sqlalchemy.orm import Session
 from app.agent.agent import RetrievalAgent
 from app.auth.factory import get_auth_provider
 from app.config import get_settings
-from app.db.models import Conversation, Message, User
+from app.db.models import Conversation, Message, Unit, User
 from app.db.session import get_db
+from app.usage import check_limit, count_message, effective_plan, ensure_plan, documents_used
 
 try:
     from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -42,6 +44,7 @@ class ChatRequest(BaseModel):
 
     message: str
     conversation_id: UUID | None = None
+    unit_id: UUID
 
 
 def _event(event: str, data: object) -> str:
@@ -49,26 +52,43 @@ def _event(event: str, data: object) -> str:
 
 
 def _sources(results: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [
-        {"filename": item["filename"], "page": item["page_number"], "snippet": str(item["content"])[:500]}
-        for item in results
-    ]
+    sources = []
+    seen = set()
+    for item in results:
+        key = (str(item["filename"]), item["page_number"])
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append({
+            "filename": item["filename"],
+            "page": item["page_number"],
+            "snippet": str(item["content"])[:200],
+        })
+    return sources
 
 
 @router.post("/chat")
 def chat(payload: ChatRequest, user_id: UUID = Depends(current_chat_user), db: Session = Depends(get_db)) -> StreamingResponse:
     """Stream a grounded answer and persist the conversation."""
     settings = get_settings()
+    unit = db.scalar(select(Unit).where(Unit.id == payload.unit_id, Unit.user_id == user_id))
+    if unit is None:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    try:
+        check_limit(db, user_id, "messages")
+    except HTTPException as exc:
+        payload_data = exc.detail if isinstance(exc.detail, dict) else {"code": "limit_reached", "limit": "messages", "message": str(exc.detail)}
+        return StreamingResponse(iter([_event("error", payload_data), _event("done", {"conversation_id": ""})]), media_type="text/event-stream", status_code=402)
     if not settings.anthropic_api_key:
         return StreamingResponse(_single_error("ANTHROPIC_API_KEY is not configured."), media_type="text/event-stream")
 
     conversation = None
     if payload.conversation_id:
-        conversation = db.scalar(select(Conversation).where(Conversation.id == payload.conversation_id, Conversation.user_id == user_id))
+        conversation = db.scalar(select(Conversation).where(Conversation.id == payload.conversation_id, Conversation.user_id == user_id, Conversation.unit_id == payload.unit_id))
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        conversation = Conversation(id=uuid4(), user_id=user_id, title=payload.message.strip()[:60] or "New conversation")
+        conversation = Conversation(id=uuid4(), user_id=user_id, unit_id=payload.unit_id, title=payload.message.strip()[:60] or "New conversation")
         db.add(conversation)
         db.flush()
 
@@ -79,26 +99,45 @@ def chat(payload: ChatRequest, user_id: UUID = Depends(current_chat_user), db: S
         .join(Conversation, Conversation.id == Message.conversation_id)
         .where(Message.conversation_id == conversation.id, Conversation.user_id == user_id)
         .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(settings.chat_history_limit)
+        .limit(settings.chat_history_limit + 1)
     ).all()
     history_rows = list(reversed(history_rows))[:-1]
     history = [{"role": row.role, "content": row.content} for row in history_rows]
 
     def generate() -> Iterator[str]:
         assistant_text = ""
+        completed = False
+        started = time.monotonic()
         try:
             agent = RetrievalAgent()
-            for token in agent.answer_stream(user_id, payload.message, history):
+            for item in agent.answer_stream(user_id, payload.message, history, unit_id=payload.unit_id):
+                if time.monotonic() - started >= 60:
+                    raise TimeoutError("The chat request took longer than 60 seconds")
+                if isinstance(item, dict) and item.get("type") == "status":
+                    yield _event("status", {"text": str(item.get("text", "Searching your notes..."))})
+                    continue
+                token = str(item)
                 assistant_text += token
                 yield _event("token", {"text": token})
             sources = _sources(getattr(agent, "sources", []))
             yield _event("sources", sources)
             yield _event("done", {"conversation_id": str(conversation.id), "sources": sources})
+            completed = True
             db.add(Message(conversation_id=conversation.id, role="assistant", content=assistant_text, sources=sources))
             db.commit()
+            count_message(db, user_id)
+        except TimeoutError:
+            completed = True
+            yield _event("error", {"message": "That took a little too long. Please try again with a shorter question."})
+            yield _event("done", {"conversation_id": str(conversation.id)})
         except Exception as exc:
             logger.exception("Chat request failed for user %s", user_id)
+            completed = True
             yield _event("error", {"message": _safe_error(exc)})
+            yield _event("done", {"conversation_id": str(conversation.id)})
+        finally:
+            if not completed:
+                yield _event("done", {"conversation_id": str(conversation.id)})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -115,9 +154,9 @@ def _single_error(message: str) -> Iterator[str]:
 
 
 @router.get("/conversations")
-def list_conversations(user_id: UUID = Depends(current_chat_user), db: Session = Depends(get_db)) -> list[dict[str, object]]:
+def list_conversations(unit_id: UUID, user_id: UUID = Depends(current_chat_user), db: Session = Depends(get_db)) -> list[dict[str, object]]:
     """List conversations owned by the current user."""
-    conversations = db.scalars(select(Conversation).where(Conversation.user_id == user_id).order_by(Conversation.created_at.desc())).all()
+    conversations = db.scalars(select(Conversation).where(Conversation.user_id == user_id, Conversation.unit_id == unit_id).order_by(Conversation.created_at.desc())).all()
     return [{"id": str(item.id), "title": item.title, "created_at": item.created_at.isoformat()} for item in conversations]
 
 
