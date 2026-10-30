@@ -17,6 +17,7 @@ from app.db.models import Chunk, Document, Unit, User
 from app.db.session import get_db
 from app.ingest.pipeline import ingest_document
 from app.storage.factory import get_storage_provider
+from app.storage.supabase import StorageAuthError, StorageUnavailableError
 from app.usage import check_limit
 from app.rate_limit import rate_limit
 from app.ingest.parse import verify_file_signature
@@ -169,6 +170,10 @@ async def register_document(payload: DocumentRegistration, background_tasks: Bac
         metadata = provider.object_info(payload.storage_path)  # type: ignore[attr-defined]
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Uploaded object not found")
+    except StorageAuthError as exc:
+        raise HTTPException(status_code=502, detail="Storage authentication failed. Please retry shortly.") from exc
+    except StorageUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Storage is temporarily unreachable. Please retry.") from exc
     real_size, real_type = _object_metadata(metadata, payload.storage_path)
     if real_size != payload.size_bytes:
         raise HTTPException(status_code=422, detail="Uploaded file size does not match the declared size")
