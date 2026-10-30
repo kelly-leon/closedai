@@ -15,13 +15,13 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: EMBEDDING_PROVIDER
-        sync: false
+        value: voyage
       - key: EMBEDDING_DIM
-        sync: false
+        value: "1024"
       - key: VOYAGE_API_KEY
         sync: false
       - key: VOYAGE_EMBEDDING_MODEL
-        sync: false
+        value: voyage-4-lite
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL

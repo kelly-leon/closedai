@@ -39,12 +39,13 @@ This repository includes `preDeployCommand: alembic upgrade head` in [render.yam
 
 1. Push the repository.
 2. In Render, create a Blueprint from [render.yaml](render.yaml).
-3. Set every `sync: false` environment variable, using the transaction pooler URL for `DATABASE_URL`.
-4. Run `alembic upgrade head` against the session pooler before deploying the web service.
-5. Set `MODE=hosted`, `AUTH_PROVIDER=supabase`, `STORAGE_PROVIDER=supabase`, and `EMBEDDING_PROVIDER=voyage`.
-6. Set `EMBEDDING_DIM` to the dimension returned by the Voyage embedding model configured in `VOYAGE_EMBEDDING_MODEL`.
-7. Set `CORS_ORIGINS=https://your-app.vercel.app` with no wildcard or localhost origin.
-8. Deploy and verify `/health`, then `/ready`.
+3. Render installs [backend/requirements.txt](backend/requirements.txt), which intentionally excludes local PyTorch and `sentence-transformers` dependencies.
+4. Set every `sync: false` environment variable, using the transaction pooler URL for `DATABASE_URL`.
+5. Run `alembic upgrade head` against the session pooler before deploying the web service.
+6. Set `MODE=hosted`, `AUTH_PROVIDER=supabase`, `STORAGE_PROVIDER=supabase`, and `EMBEDDING_PROVIDER=voyage`.
+7. Set `EMBEDDING_DIM` to the dimension returned by the Voyage embedding model configured in `VOYAGE_EMBEDDING_MODEL`.
+8. Set `CORS_ORIGINS=https://your-app.vercel.app` with no wildcard or localhost origin.
+9. Deploy and verify `/health`, then `/ready`.
 
 ## Vercel frontend
 

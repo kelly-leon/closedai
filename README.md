@@ -14,6 +14,14 @@ ClosedAI is an open-source personal AI agent that lets you ask questions against
 
 The self-hosted Docker Compose environment provisions the Next.js frontend, FastAPI backend, and PostgreSQL with pgvector.
 
+Hosted Render deployments install only [backend/requirements.txt](backend/requirements.txt). Self-hosted deployments need local embeddings as well:
+
+```bash
+pip install -r backend/requirements.txt -r backend/requirements-local.txt
+```
+
+The Docker image installs both dependency sets. Development and tests use `backend/requirements-dev.txt`.
+
 ### Frontend development
 
 ```bash
