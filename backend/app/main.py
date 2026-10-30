@@ -238,7 +238,8 @@ def startup_tasks() -> None:
             if db.scalar(select(Unit).where(Unit.user_id == default_id)) is None:
                 db.add(Unit(user_id=default_id, name="General"))
                 db.commit()
-    threading.Thread(target=_warm_embedding_model, daemon=True, name="embedding-warmup").start()
+    if settings.embedding_provider == "local":
+        threading.Thread(target=_warm_embedding_model, daemon=True, name="embedding-warmup").start()
 
 
 @app.get("/health")

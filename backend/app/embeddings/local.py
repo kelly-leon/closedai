@@ -2,11 +2,6 @@
 
 from functools import lru_cache
 
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    SentenceTransformer = None  # type: ignore[assignment,misc]
-
 from app.config import get_settings
 from app.embeddings.base import EmbeddingProvider
 
@@ -14,8 +9,12 @@ from app.embeddings.base import EmbeddingProvider
 @lru_cache(maxsize=1)
 def _model(model_name: str):
     """Load and cache a local embedding model."""
-    if SentenceTransformer is None:
-        raise RuntimeError("sentence-transformers is required for the local embedding provider")
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise RuntimeError(
+            "Install requirements-local.txt to use local embeddings."
+        ) from exc
     return SentenceTransformer(model_name)
 
 
