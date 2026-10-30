@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     voyage_api_key: str = ""
-    voyage_embedding_model: str = "voyage-2"
+    voyage_embedding_model: str = "voyage-4-lite"
     local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:3000"])
     supabase_url: str = ""
