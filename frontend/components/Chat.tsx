@@ -7,6 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { api, Source } from "../lib/api";
 import { inlineSources, SourceList } from "./SourceList";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { CrawlerCanvas } from "./crawler/CrawlerCanvas";
 
 function MarkdownInline({ children, sources }: { children: ReactNode; sources: Source[] | null }) {
   return <>{Children.map(children, child => {
@@ -50,6 +51,8 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   const [selectionButton, setSelectionButton] = useState<SelectionButton | null>(null);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
   const [workingStatus, setWorkingStatus] = useState<string | undefined>(undefined);
+  const [searchWords, setSearchWords] = useState<string[]>([]);
+  const [crawlerVisible, setCrawlerVisible] = useState(false);
 
   useEffect(() => {
     function nodeIsInsideAssistant(node: Node | null): boolean {
@@ -135,6 +138,18 @@ export function Chat({ conversationId }: { conversationId?: string }) {
     setLastMessage(message);
     setInput(""); setQuote(null); setSelectionButton(null); setError(null); setStreaming(true);
     setThinking(true);
+    setCrawlerVisible(true);
+    void (async () => {
+      try {
+        const unitId = window.localStorage.getItem("closedai-unit-id");
+        const documents = unitId ? await api.documents(unitId) : [];
+        const names = documents.map(document => document.filename.replace(/\.[^.]+$/, ""));
+        const questionWords = question.toLowerCase().match(/[a-z0-9]{3,}/g)?.slice(0, 12) ?? [];
+        setSearchWords(names.length ? [...names, ...questionWords] : [...questionWords, "notes", "slides", "past papers", "answers", "sources"]);
+      } catch {
+        setSearchWords([...question.toLowerCase().match(/[a-z0-9]{3,}/g)?.slice(0, 12) ?? [], "notes", "slides", "past papers"]);
+      }
+    })();
     setMessages(current => [...current, { id: crypto.randomUUID(), role: "user", content: message, sources: null }, { id: crypto.randomUUID(), role: "assistant", content: "", sources: null }]);
     const abort = new AbortController(); controller.current = abort;
     let terminal = false;
@@ -158,6 +173,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
           if (eventName === "token") {
             setThinking(false);
             setWorkingStatus(undefined);
+            setCrawlerVisible(false);
             setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, content: item.content + String(record.text ?? "") } : item));
           }
           if (eventName === "status") { setThinking(true); setWorkingStatus(typeof record.text === "string" ? record.text : "Searching your notes..."); }
@@ -175,6 +191,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
             setLimitReached(record.code === "limit_reached");
             terminal = true;
             setError(`I couldn't complete that: ${message}`);
+            setCrawlerVisible(false);
           }
         }
         if (done) break;
@@ -185,7 +202,8 @@ export function Chat({ conversationId }: { conversationId?: string }) {
         const detail = caught instanceof Error ? caught.message : "";
         setError(detail && detail !== "Failed to fetch" ? detail : "I couldn't reach ClosedAI. Check your connection and try again.");
       }
-    } finally { controller.current = null; setThinking(false); setWorkingStatus(undefined); setStreaming(false); }
+      setCrawlerVisible(false);
+    } finally { controller.current = null; setCrawlerVisible(false); setThinking(false); setWorkingStatus(undefined); setStreaming(false); }
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -193,7 +211,11 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   }
 
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
+    <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
+      {crawlerVisible && <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden bg-slate-950/45" aria-live="polite">
+        <CrawlerCanvas mode="search" words={searchWords} />
+        <p className="absolute left-1/2 top-[58%] -translate-x-1/2 whitespace-nowrap bg-slate-950/75 px-3 py-1 text-sm font-medium text-sky-100">Searching your notes...</p>
+      </div>}
       <div className="mx-auto max-w-3xl space-y-5">
         {loading && <div className="h-24 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />}
         {!loading && messages.length === 0 && <div className="py-20 text-center"><h1 className="text-2xl font-semibold">What are we exploring?</h1><p className="mt-2 rounded-md bg-slate-950/70 px-3 py-1.5 text-slate-200 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">Ask a question grounded in your uploaded documents.</p></div>}
@@ -222,7 +244,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
       </div>}
       <div className="flex items-end gap-2 rounded-[28px] border border-white/10 bg-slate-950/80 p-2 shadow-lg backdrop-blur-xl">
         <textarea ref={inputRef} aria-label="Message" rows={1} value={input} onChange={event => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={streaming} placeholder="Ask your documents…" className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2 text-[#e8ecf4] outline-none placeholder:text-[#a9b3c7] disabled:opacity-60" />
-        {streaming ? <button type="button" onClick={() => controller.current?.abort()} aria-label="Stop response" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg text-white">■</button> : <button type="submit" disabled={!input.trim() && !quote} aria-label="Send message" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-xl text-slate-950 disabled:opacity-40">↑</button>}
+        {streaming ? <button type="button" onClick={() => { setCrawlerVisible(false); controller.current?.abort(); }} aria-label="Stop response" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg text-white">■</button> : <button type="submit" disabled={!input.trim() && !quote} aria-label="Send message" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-xl text-slate-950 disabled:opacity-40">↑</button>}
       </div>
       </div>
     </form>

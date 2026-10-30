@@ -153,7 +153,7 @@ export const api = {
       const xhr = new XMLHttpRequest();
       xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
       xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error("The file could not be uploaded to storage. Please try again."));
-      xhr.onerror = () => reject(new Error("Upload failed. Please check your connection."));
+      xhr.onerror = () => reject(new Error("The file could not be uploaded to storage. Please try again."));
       xhr.open("PUT", uploadUrl);
       xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
       xhr.setRequestHeader("x-upsert", "false");

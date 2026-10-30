@@ -168,6 +168,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="mt-1 h-1.5 rounded bg-white/10"><div className="h-full rounded bg-emerald-400" style={{ width: `${Math.min(100, 100 * Number(usage.documents_used ?? 0) / Math.max(1, Number(usage.document_quota ?? 1)))}%` }} /></div>
       </div>}
       {!rail && supabaseAuthEnabled && <div className="shrink-0 border-t border-white/10 p-3 text-xs text-white">
+          <Link href="/" className="mb-3 block text-slate-200 hover:text-white">Home</Link>
           <Link href="/upgrade" className="mb-3 block w-full rounded-lg bg-amber-300 py-2 text-center font-semibold text-slate-950">Upgrade</Link>
           <div className="mt-2 flex items-center justify-between gap-2">
             <span className="truncate text-white">{userName || userEmail}</span>
