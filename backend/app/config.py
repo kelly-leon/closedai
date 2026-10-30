@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     mode: Literal["selfhosted", "hosted"] = "selfhosted"
     auth_provider: Literal["none", "supabase"] = "none"
     storage_provider: Literal["local", "supabase"] = "local"
-    embedding_provider: Literal["local", "voyage", "openai"] = "local"
+    embedding_provider: Literal["local", "voyage", "openai"] | None = None
     database_url: str = "postgresql+psycopg://closedai:closedai@localhost:5432/closedai"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-5-20250929"
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.2
     max_tool_rounds: int = 6
     chat_history_limit: int = 20
-    embedding_dim: int = 384
+    embedding_dim: int | None = None
     embedding_batch_size: int = 32
     ingest_timeout_seconds: int = 600
     upload_dir: str = "./uploads"
@@ -49,6 +49,38 @@ class Settings(BaseSettings):
     trial_messages: int = 20
     trial_documents: int = 3
     admin_api_key: str = ""
+    tokens_per_message: int = 5
+    trial_tokens_per_week: int = 100
+    paid_documents: int = 20
+    premium_documents: int = 50
+    premium_daily_cap: int = 100
+    mpesa_till_number: str = ""
+    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    admin_notify_email: str = ""
+    resend_api_key: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    timezone: str = "Africa/Nairobi"
+    frontend_url: str = "http://localhost:3000"
+    sentry_dsn: str = ""
+    enable_docs: bool = False
+    max_pages: int = 300
+    max_text_chars: int = 2_000_000
+
+    @model_validator(mode="after")
+    def default_hosted_embeddings(self) -> "Settings":
+        if self.embedding_provider is None:
+            self.embedding_provider = "voyage" if self.mode == "hosted" else "local"
+        if self.embedding_dim is None:
+            self.embedding_dim = 1024 if self.mode == "hosted" else 384
+        return self
+
+    @field_validator("admin_emails", mode="before")
+    @classmethod
+    def parse_admin_emails(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip().lower() for item in value.split(",") if item.strip()]
+        return value
 
     @field_validator("cors_origins", mode="before")
     @classmethod

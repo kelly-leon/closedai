@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, ConversationSummary, Unit, Usage } from "../lib/api";
+import { ApiError, api, ConversationSummary, Unit, Usage } from "../lib/api";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -16,9 +16,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [redeemCode, setRedeemCode] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [userName, setUserName] = useState("");
+  const [initialError, setInitialError] = useState("");
   const pathname = usePathname();
   const router = useRouter();
   const authPage = ["/login", "/signup", "/forgot-password", "/auth/reset"].includes(pathname);
+  const publicPage = pathname === "/" || pathname === "/privacy" || pathname === "/terms";
 
   async function load() {
     if (!unitId) return;
@@ -26,17 +29,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     finally { setLoading(false); }
   }
   useEffect(() => { void load(); }, [pathname]);
-  useEffect(() => {
-    if (authPage) return;
-    if (supabase) void supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? ""));
-    setCollapsed(window.localStorage.getItem("closedai-sidebar-collapsed") === "true");
-    void api.units().then(items => {
+  async function loadWorkspace() {
+    setInitialError("");
+    try {
+      const [items, currentUsage] = await Promise.all([api.units(), api.usage()]);
       setUnits(items);
+      setUsage(currentUsage);
       const saved = window.localStorage.getItem("closedai-unit-id");
       const selected = items.find(item => item.id === saved) ?? items[0];
       if (selected) { setUnitId(selected.id); window.localStorage.setItem("closedai-unit-id", selected.id); }
-    }).catch(() => undefined);
-    void api.usage().then(setUsage).catch(() => undefined);
+    } catch (error) {
+      if (error instanceof ApiError && error.retryable) setInitialError(error.message);
+    }
+  }
+
+  useEffect(() => {
+    if (authPage || (supabaseAuthEnabled && publicPage)) return;
+    if (supabase) void supabase.auth.getUser().then(({ data }) => {
+      setUserEmail(data.user?.email ?? "");
+      const metadata = data.user?.user_metadata as { full_name?: string } | undefined;
+      setUserName(metadata?.full_name?.trim() ?? "");
+    });
+    setCollapsed(window.localStorage.getItem("closedai-sidebar-collapsed") === "true");
+    void loadWorkspace();
     const refresh = (event: Event) => {
       const detail = (event as CustomEvent<ConversationSummary>).detail;
       if (detail) setConversations(current => current.some(item => item.id === detail.id) ? current : [detail, ...current]);
@@ -45,14 +60,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("closedai:conversation-created", refresh);
   }, []);
 
-  if (authPage) return <>{children}</>;
-
   useEffect(() => {
     if (!unitId) return;
     window.localStorage.setItem("closedai-unit-id", unitId);
     void load();
     window.dispatchEvent(new CustomEvent("closedai:unit-changed", { detail: unitId }));
   }, [unitId]);
+
+  if (authPage || (supabaseAuthEnabled && publicPage)) return <>{children}</>;
 
   async function refreshUnits() {
     const items = await api.units();
@@ -77,6 +92,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     try { await api.redeem(redeemCode.trim()); setRedeemCode(""); setUsage(await api.usage()); } catch (error) { window.alert(error instanceof Error ? error.message : "Invalid code."); }
   }
 
+  async function deleteAccount() {
+    if (!window.confirm("Delete your ClosedAI account and all stored data permanently? This cannot be undone.")) return;
+    await api.deleteAccount();
+    await supabase?.auth.signOut();
+    window.localStorage.clear();
+    router.replace("/signup");
+  }
+
   function toggleCollapsed() {
     setCollapsed(current => {
       const next = !current;
@@ -88,17 +111,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   function newChat() {
     window.dispatchEvent(new CustomEvent("closedai:new-chat"));
     setOpen(false);
-    router.push("/");
+    router.push(supabaseAuthEnabled ? "/app" : "/");
   }
 
   async function remove(id: string) {
     if (!window.confirm("Delete this conversation?")) return;
     await api.deleteConversation(id);
     await load();
-    if (pathname.includes(id)) router.push("/");
+    if (pathname.includes(id)) router.push(supabaseAuthEnabled ? "/app" : "/");
   }
 
   const rail = collapsed;
+  if (initialError) return <main className="relative z-10 flex h-screen items-center justify-center bg-slate-950 px-5 text-center text-white"><div><p role="alert" className="max-w-md text-slate-200">{initialError}</p><button type="button" onClick={() => void loadWorkspace()} className="mt-4 rounded-lg bg-sky-300 px-4 py-2 font-semibold text-slate-950">Retry</button></div></main>;
   return <div className="relative z-10 flex h-screen overflow-hidden text-slate-100 supports-[height:100dvh]:h-dvh">
     <button className="fixed right-3 top-3 z-50 rounded-md border border-white/20 bg-slate-950/80 p-2 text-white backdrop-blur md:hidden" onClick={() => setOpen(!open)} aria-label="Toggle navigation">☰</button>
     <aside className={`${open ? "translate-x-0" : "-translate-x-full"} fixed inset-y-0 left-0 z-40 flex h-full w-72 shrink-0 flex-col overflow-hidden border-r border-white/10 bg-slate-950/55 text-slate-100 backdrop-blur-xl transition-[transform,width] duration-300 md:static md:translate-x-0 ${rail ? "md:w-16" : "md:w-72"}`}>
@@ -112,7 +136,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <button onClick={() => void deleteUnit()} title="Delete unit" className="rounded-lg bg-white/10 px-2">×</button>
         </div>}
         <div className={`flex items-center ${rail ? "justify-center" : "justify-between"}`}>
-          {!rail && <Link href="/" className="block px-1 py-2 text-xl font-bold" onClick={() => setOpen(false)}>ClosedAI</Link>}
+          {!rail && <Link href={supabaseAuthEnabled ? "/app" : "/"} className="block px-1 py-2 text-xl font-bold" onClick={() => setOpen(false)}>ClosedAI</Link>}
           {rail && <button onClick={toggleCollapsed} className="hidden h-9 w-9 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10 md:flex" aria-label="Expand sidebar" title="Expand sidebar">›</button>}
           {!rail && <button onClick={toggleCollapsed} className="hidden h-9 w-9 items-center justify-center rounded-lg text-slate-200 hover:bg-white/10 md:flex" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button>}
           <button onClick={() => setOpen(false)} className="h-9 w-9 rounded-lg text-slate-200 hover:bg-white/10 md:hidden" aria-label="Close navigation">×</button>
@@ -129,23 +153,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <button onClick={() => void remove(item.id)} className="invisible px-2 text-slate-300 group-hover:visible" aria-label={`Delete ${item.title}`}>×</button>
         </div>)}
       </nav>}
-      {!rail && usage && usage.plan !== "unlimited" && <div className="shrink-0 border-t border-white/10 p-3 text-xs">
-        <div className="flex justify-between"><span>Messages</span><span>{usage.messages_used}/{usage.message_quota}</span></div>
-        <div className="mt-1 h-1.5 rounded bg-white/10"><div className="h-full rounded bg-sky-400" style={{ width: `${Math.min(100, 100 * Number(usage.messages_used ?? 0) / Math.max(1, Number(usage.message_quota ?? 1)))}%` }} /></div>
+      {!rail && usage && usage.plan !== "unlimited" && <div className="shrink-0 border-t border-white/10 p-3 text-xs text-white">
+        {usage.plan === "trial" && <>
+          <div className="flex justify-between gap-2"><span>Trial</span><span>{usage.trial_tokens_remaining ?? usage.tokens_available ?? 0} of 100 tokens left</span></div>
+          {usage.trial_resets_at && <p className="mt-1 text-slate-300">Resets in {Math.max(0, Math.ceil((new Date(usage.trial_resets_at).getTime() - Date.now()) / 86400000))} days</p>}
+          <div className="mt-1 h-1.5 rounded bg-white/10"><div className="h-full rounded bg-sky-400" style={{ width: `${Math.min(100, Number(usage.trial_tokens_remaining ?? 0))}%` }} /></div>
+        </>}
+        {usage.plan === "paid" && <div className="flex justify-between"><span>Token balance</span><span>{usage.token_balance ?? 0}</span></div>}
+        {usage.plan === "premium" && <>
+          <div>Premium until {usage.premium_until ? new Date(usage.premium_until).toLocaleDateString() : ""}</div>
+          <div className="mt-1 flex justify-between"><span>Answers today</span><span>{usage.daily_used ?? 0} of 100</span></div>
+        </>}
         <div className="mt-2 flex justify-between"><span>Documents</span><span>{usage.documents_used}/{usage.document_quota}</span></div>
         <div className="mt-1 h-1.5 rounded bg-white/10"><div className="h-full rounded bg-emerald-400" style={{ width: `${Math.min(100, 100 * Number(usage.documents_used ?? 0) / Math.max(1, Number(usage.document_quota ?? 1)))}%` }} /></div>
-        {(Number(usage.messages_used ?? 0) >= Number(usage.message_quota ?? 0) || Number(usage.documents_used ?? 0) >= Number(usage.document_quota ?? 0)) && <div className="mt-3 rounded-lg border border-amber-300/30 bg-amber-950/60 p-2">
-          <p className="font-semibold text-amber-100">Redeem a code to continue</p>
-          <p className="mt-1 text-slate-300">{process.env.NEXT_PUBLIC_UPGRADE_TEXT || "Contact support for an upgrade code."}</p>
-          <div className="mt-2 flex gap-1"><input value={redeemCode} onChange={event => setRedeemCode(event.target.value)} className="min-w-0 flex-1 rounded bg-slate-950 px-2 py-1" placeholder="ABCD-EFGH-JKLM" /><button onClick={() => void redeem()} className="rounded bg-white px-2 text-slate-950">Redeem</button></div>
-        </div>}
-        {supabaseAuthEnabled && !rail && <div className="shrink-0 border-t border-white/10 p-3 text-xs">
-          <Link href="/#usage" className="block truncate text-slate-300 hover:text-white">Usage · {usage ? usage.plan : ""}</Link>
+      </div>}
+      {!rail && supabaseAuthEnabled && <div className="shrink-0 border-t border-white/10 p-3 text-xs text-white">
+          <Link href="/upgrade" className="mb-3 block w-full rounded-lg bg-amber-300 py-2 text-center font-semibold text-slate-950">Upgrade</Link>
           <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="truncate text-slate-200">{userEmail}</span>
-            <button onClick={async () => { await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
+            <span className="truncate text-white">{userName || userEmail}</span>
+            <div className="flex gap-2">
+              <button onClick={deleteAccount} className="rounded px-2 py-1 text-red-300 hover:bg-red-950/40">Delete my account</button>
+              <button onClick={async () => { await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
+            </div>
           </div>
-        </div>}
       </div>}
     </aside>
     {open && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setOpen(false)} />}

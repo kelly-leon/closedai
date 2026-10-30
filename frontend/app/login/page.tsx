@@ -17,7 +17,7 @@ export default function LoginPage() {
     const { error: authError } = await supabase!.auth.signInWithPassword({ email: email.trim(), password });
     setBusy(false);
     if (authError) setError(authError.message);
-    else window.location.assign("/");
+    else window.location.assign("/app");
   }
   async function google() {
     await supabase!.auth.signInWithOAuth({ provider: "google", options: { redirectTo: `${window.location.origin}/auth/reset` } });

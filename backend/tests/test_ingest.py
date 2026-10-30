@@ -39,7 +39,7 @@ def test_scanned_pdf_is_rejected(monkeypatch) -> None:
 
     monkeypatch.setattr("app.ingest.parse.PdfReader", Reader)
     with pytest.raises(ValueError, match=r"scanned document"):
-        parse_document("scan.pdf", b"pdf")
+        parse_document("scan.pdf", b"%PDF-pdf")
 
 
 def test_startup_recovery_marks_stale_documents(monkeypatch) -> None:

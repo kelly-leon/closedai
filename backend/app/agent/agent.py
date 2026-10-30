@@ -58,6 +58,8 @@ class RetrievalAgent:
         messages = recent_history + [{"role": "user", "content": message}]
         sources: list[dict[str, Any]] = []
         started = time.monotonic()
+        self.input_tokens = 0
+        self.output_tokens = 0
         for _round in range(self.settings.max_tool_rounds + 1):
             if time.monotonic() - started >= 60:
                 raise TimeoutError("The request took longer than 60 seconds")
@@ -68,6 +70,13 @@ class RetrievalAgent:
                 tools=[SEARCH_TOOL],
                 messages=messages,
             )
+            usage = getattr(response, "usage", None)
+            if isinstance(usage, dict):
+                self.input_tokens += int(usage.get("input_tokens", 0))
+                self.output_tokens += int(usage.get("output_tokens", 0))
+            else:
+                self.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+                self.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
             tool_blocks = [block for block in response.content if _value(block, "type") == "tool_use"]
             text_blocks = [_value(block, "text", "") for block in response.content if _value(block, "type") == "text"]
             if not tool_blocks or response.stop_reason != "tool_use":

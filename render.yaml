@@ -1,0 +1,72 @@
+services:
+  - type: web
+    name: closedai-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    preDeployCommand: alembic upgrade head
+    healthCheckPath: /health
+    envVars:
+      - key: MODE
+        sync: false
+      - key: AUTH_PROVIDER
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: EMBEDDING_PROVIDER
+        sync: false
+      - key: EMBEDDING_DIM
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: VOYAGE_EMBEDDING_MODEL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        sync: false
+      - key: STORAGE_PROVIDER
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: MPESA_TILL_NUMBER
+        sync: false
+      - key: ADMIN_NOTIFY_EMAIL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_ID
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: ENABLE_DOCS
+        sync: false
+      - key: MAX_FILE_SIZE_MB
+        sync: false
+      - key: MAX_PAGES
+        sync: false
+      - key: MAX_TEXT_CHARS
+        sync: false

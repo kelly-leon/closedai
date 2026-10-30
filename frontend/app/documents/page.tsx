@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { DragEvent, useEffect, useRef, useState } from "react";
-import { api, DocumentItem } from "../../lib/api";
+import { api, ApiError, DocumentItem } from "../../lib/api";
+import { supabaseAuthEnabled } from "../../lib/supabase";
 
 interface UploadState { name: string; progress: number; error?: string }
 const allowed = new Set(["pdf", "docx", "txt", "md"]);
@@ -15,6 +16,7 @@ export default function DocumentsPage() {
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const [unitId, setUnitId] = useState("");
+  const [limitReached, setLimitReached] = useState(false);
 
   async function load() {
     const selected = window.localStorage.getItem("closedai-unit-id");
@@ -42,8 +44,22 @@ export default function DocumentsPage() {
       const validation = !allowed.has(extension) ? "Unsupported file type." : file.size > maxBytes ? "File is larger than 50 MB." : null;
       if (validation) { setUploads(current => [...current, { name: file.name, progress: 0, error: validation }]); continue; }
       setUploads(current => [...current, { name: file.name, progress: 0 }]);
-      try { await api.uploadDocument(file, unitId, progress => setUploads(current => current.map(item => item.name === file.name ? { ...item, progress } : item))); await load(); }
-      catch (error) { setUploads(current => current.map(item => item.name === file.name ? { ...item, error: error instanceof Error ? error.message : "Upload failed." } : item)); }
+      try {
+        if (supabaseAuthEnabled) {
+          const signed = await api.uploadDocumentUrl(file, unitId);
+          await api.uploadSignedDocument(signed.upload_url, file, progress => setUploads(current => current.map(item => item.name === file.name ? { ...item, progress } : item)));
+          await api.registerHostedDocument(signed.storage_path, file, unitId);
+        } else {
+          await api.uploadDocument(file, unitId, progress => setUploads(current => current.map(item => item.name === file.name ? { ...item, progress } : item)));
+        }
+        await load();
+      }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "Upload failed.";
+        if (error instanceof ApiError && error.code === "limit_reached") setLimitReached(true);
+        else if (/limit|quota|upgrade/i.test(message)) setLimitReached(true);
+        setUploads(current => current.map(item => item.name === file.name ? { ...item, error: message } : item));
+      }
     }
   }
   function drop(event: DragEvent<HTMLDivElement>) { event.preventDefault(); setDragging(false); void upload(Array.from(event.dataTransfer.files)); }
@@ -57,6 +73,7 @@ export default function DocumentsPage() {
         <input ref={input} type="file" multiple accept=".pdf,.docx,.txt,.md" className="hidden" onChange={event => void upload(Array.from(event.target.files ?? []))} />
         <p className="font-medium">Drop files here or click to upload</p><p className="mt-1 text-xs text-slate-200 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">PDF, DOCX, TXT, or MD · up to 50 MB each</p>
       </div>
+      {limitReached && <div role="alert" className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-amber-300/40 bg-amber-950/85 p-4 text-white"><span>You’ve reached your document allowance. Upgrade to keep adding files.</span><Link href="/upgrade" className="rounded-full bg-white px-3 py-1 font-semibold text-slate-950">Upgrade</Link></div>}
       {uploads.length > 0 && <div className="mt-4 space-y-2">{uploads.map((item, index) => <div key={`${item.name}-${index}`} className="rounded-lg border p-3 dark:border-slate-800"><div className="flex justify-between text-sm"><span className="truncate">{item.name}</span><span>{item.error ?? `${item.progress}%`}</span></div>{!item.error && <div className="mt-2 h-1 overflow-hidden rounded bg-slate-200"><div className="h-full bg-slate-900" style={{ width: `${item.progress}%` }} /></div>}</div>)}</div>}
       {loading ? <div className="mt-8 h-24 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" /> : documents.length === 0 ? <div className="py-16 text-center text-slate-100"><p className="rounded-md bg-slate-950/70 px-3 py-2 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">No documents yet.</p><p className="mt-1 text-sm">Upload one above to start asking grounded questions.</p></div> : <div className="mt-8 divide-y rounded-xl border bg-white dark:border-slate-800 dark:bg-slate-900">{documents.map(document => <div key={document.id} className="flex items-center gap-3 p-4"><div className="min-w-0 flex-1"><p className="truncate font-medium">{document.filename}</p>{document.status === "failed" && <p className="mt-1 text-xs text-red-600">{document.error_message || "Processing failed."}</p>}</div><span className="rounded-full px-2 py-1 text-xs font-medium capitalize" data-status={document.status}>{document.status}</span>{document.status === "failed" && <button onClick={() => void retry(document.id)} className="text-sm text-blue-600">Retry</button>}<button onClick={() => void remove(document.id, document.filename)} className="text-sm text-red-600" aria-label={`Delete ${document.filename}`}>Delete</button></div>)}</div>}
     </div>

@@ -9,16 +9,17 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent.agent import RetrievalAgent
 from app.auth.factory import get_auth_provider
 from app.config import get_settings
-from app.db.models import Conversation, Message, Unit, User
+from app.db.models import Conversation, Message, Unit, UsageEvent, User, UserPlan
 from app.db.session import get_db
-from app.usage import check_limit, count_message, effective_plan, ensure_plan, documents_used
+from app.usage import check_limit, count_message
+from app.rate_limit import limiter, rate_limit
 
 try:
     from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -34,9 +35,14 @@ async def current_chat_user(credentials: HTTPAuthorizationCredentials | None = D
     """Resolve and provision the current request user."""
     provider = get_auth_provider()
     claims = provider.get_claims(credentials)
-    user_id = UUID(provider.get_user_id(credentials))
-    if db.get(User, user_id) is None:
-        db.add(User(id=user_id, email=str(claims.get("email")) if claims.get("email") else None))
+    subject = claims["sub"] if "sub" in claims else provider.get_user_id(credentials)
+    user_id = UUID(str(subject))
+    email = str(claims["email"]) if claims.get("email") else None
+    metadata = claims.get("user_metadata")
+    full_name = metadata.get("full_name") if isinstance(metadata, dict) else claims.get("full_name")
+    user = db.get(User, user_id)
+    if user is None:
+        db.add(User(id=user_id, email=email, full_name=str(full_name).strip() if isinstance(full_name, str) else None))
         try:
             db.commit()
         except Exception:
@@ -44,9 +50,16 @@ async def current_chat_user(credentials: HTTPAuthorizationCredentials | None = D
             user = db.get(User, user_id)
             if user is None:
                 raise
-            if user.email is None and claims.get("email"):
-                user.email = str(claims["email"])
-                db.commit()
+    else:
+        changed = False
+        if email and user.email != email:
+            user.email = email
+            changed = True
+        if isinstance(full_name, str) and full_name.strip() and user.full_name != full_name.strip():
+            user.full_name = full_name.strip()
+            changed = True
+        if changed:
+            db.commit()
     return user_id
 
 
@@ -56,6 +69,24 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: UUID | None = None
     unit_id: UUID
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        lines = value.splitlines()
+        quoted = []
+        in_quote = lines and lines[0].startswith("> ")
+        for line in lines:
+            if line.startswith("> "):
+                quoted.append(line[2:])
+            elif in_quote:
+                break
+        quote = "\n".join(quoted)
+        if len(quote) > 4000:
+            raise ValueError("Quoted text must be 4,000 characters or fewer")
+        if len(value) > 4000:
+            raise ValueError("Messages must be 4,000 characters or fewer")
+        return value
 
 
 def _event(event: str, data: object) -> str:
@@ -82,6 +113,7 @@ def _sources(results: list[dict[str, object]]) -> list[dict[str, object]]:
 def chat(payload: ChatRequest, user_id: UUID = Depends(current_chat_user), db: Session = Depends(get_db)) -> StreamingResponse:
     """Stream a grounded answer and persist the conversation."""
     settings = get_settings()
+    rate_limit(f"chat:{user_id}", 10, 60, "You're sending messages too quickly. Please wait a minute.")
     unit = db.scalar(select(Unit).where(Unit.id == payload.unit_id, Unit.user_id == user_id))
     if unit is None:
         raise HTTPException(status_code=404, detail="Unit not found")
@@ -135,7 +167,20 @@ def chat(payload: ChatRequest, user_id: UUID = Depends(current_chat_user), db: S
             yield _event("sources", sources)
             db.add(Message(conversation_id=conversation.id, role="assistant", content=assistant_text, sources=sources))
             db.commit()
-            count_message(db, user_id)
+            charged = count_message(db, user_id)
+            if charged:
+                tokens_charged = settings.tokens_per_message if settings.mode == "hosted" else 0
+                plan = db.get(UserPlan, user_id)
+                if plan and plan.premium_until and plan.premium_until > datetime.utcnow():
+                    tokens_charged = 0
+                db.add(UsageEvent(
+                    user_id=user_id, conversation_id=conversation.id,
+                    model=settings.anthropic_model,
+                    input_tokens=int(getattr(agent, "input_tokens", 0)),
+                    output_tokens=int(getattr(agent, "output_tokens", 0)),
+                    tokens_charged=tokens_charged,
+                ))
+                db.commit()
             yield _event("done", {"conversation_id": str(conversation.id), "sources": sources})
             completed = True
             terminal = True
@@ -151,9 +196,12 @@ def chat(payload: ChatRequest, user_id: UUID = Depends(current_chat_user), db: S
             yield _event("done", {"conversation_id": str(conversation.id)})
             terminal = True
         finally:
+            limiter.release_concurrency(f"chat-stream:{user_id}")
             if not terminal:
                 yield _event("done", {"conversation_id": str(conversation.id)})
 
+    if not limiter.acquire_concurrency(f"chat-stream:{user_id}", 2):
+        raise HTTPException(status_code=429, detail={"code": "rate_limited", "message": "Two chats are already active. Please wait for one to finish."}, headers={"Retry-After": "5"})
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 

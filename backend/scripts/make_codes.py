@@ -19,8 +19,7 @@ def normalize(code: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--count", type=int, default=1)
-    parser.add_argument("--message-quota", type=int, required=True)
-    parser.add_argument("--document-quota", type=int, required=True)
+    parser.add_argument("--tokens", type=int, default=0)
     parser.add_argument("--duration-days", type=int, required=True)
     args = parser.parse_args()
     plain_codes = []
@@ -28,7 +27,7 @@ def main() -> None:
         for _ in range(args.count):
             code = generate_code()
             plain_codes.append(code)
-            db.add(RedeemCode(code_hash=hashlib.sha256(normalize(code).encode("ascii")).hexdigest(), plan_name="paid", message_quota=args.message_quota, document_quota=args.document_quota, duration_days=args.duration_days))
+            db.add(RedeemCode(code_hash=hashlib.sha256(normalize(code).encode("ascii")).hexdigest(), plan_name="paid", message_quota=0, document_quota=0, duration_days=args.duration_days, token_grant=args.tokens))
         db.commit()
     print("\n".join(plain_codes))
 

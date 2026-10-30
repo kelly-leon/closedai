@@ -6,6 +6,11 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
+from uuid import UUID
 
 from app.auth.supabase import SupabaseAuthProvider
 from app.config import get_settings
@@ -89,6 +94,41 @@ def test_asymmetric_token_uses_jwks(monkeypatch) -> None:
     header = {"alg": "RS256", "kid": "test-key"}
     token = jwt.encode(claims(), private_key, algorithm="RS256", headers=header)
     assert SupabaseAuthProvider().get_user_id(credentials(token))
+
+
+def test_valid_token_gets_usage_200_on_first_request(monkeypatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mode", "hosted")
+    monkeypatch.setattr(settings, "auth_provider", "supabase")
+    monkeypatch.setattr(settings, "supabase_url", "https://project.supabase.co")
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "test-shared-secret-that-is-long-enough")
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    from app.db.models import Base, Document, User, UserPlan
+    Base.metadata.create_all(engine, tables=[User.__table__, UserPlan.__table__, Document.__table__])
+
+    def db_session():
+        with Session(engine) as db:
+            yield db
+
+    user_id = uuid4()
+    payload = claims(user_id, user_metadata={"full_name": "First User"})
+    token = jwt.encode(payload, settings.supabase_jwt_secret, algorithm="HS256")
+
+    from app.main import app
+    from app.db.session import get_db
+    monkeypatch.setattr("app.api_documents.get_auth_provider", lambda: SupabaseAuthProvider())
+    app.dependency_overrides[get_db] = db_session
+    try:
+        response = TestClient(app).get("/me/usage", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200
+        with Session(engine) as db:
+            user = db.get(User, UUID(str(user_id)))
+            assert user is not None
+            assert user.full_name == "First User"
+            assert db.get(UserPlan, user.id) is not None
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_startup_guards(monkeypatch) -> None:

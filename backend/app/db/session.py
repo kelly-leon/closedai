@@ -22,7 +22,14 @@ def get_engine() -> Engine:
     global _engine, _session_factory
     if _engine is None:
         settings = get_settings()
-        _engine = create_engine(settings.database_url)
+        connect_args: dict[str, object] = {}
+        url = settings.database_url
+        if url.startswith(("postgresql://", "postgres://")) and "sslmode=" not in url:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}sslmode=require"
+        if ":6543/" in url or "pooler.supabase.com" in url:
+            connect_args["prepare_threshold"] = 0
+        _engine = create_engine(url, connect_args=connect_args)
         _session_factory = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
     return _engine
 

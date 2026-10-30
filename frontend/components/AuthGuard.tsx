@@ -10,27 +10,27 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(!supabaseAuthEnabled);
   const [signedIn, setSignedIn] = useState(false);
   const authPage = pathname === "/login" || pathname === "/signup" || pathname === "/forgot-password" || pathname === "/auth/reset";
+  const publicPage = pathname === "/" || pathname === "/privacy" || pathname === "/terms";
 
   useEffect(() => {
-    if (!supabaseAuthEnabled || !supabase) { setReady(true); return; }
+    if (!supabaseAuthEnabled || !supabase) { setSignedIn(false); setReady(true); return; }
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
+    const applySession = (hasSession: boolean) => {
       if (!active) return;
-      const authenticated = Boolean(data.session);
-      setSignedIn(authenticated);
+      setSignedIn(hasSession);
       setReady(true);
-      if (!authenticated && !authPage) router.replace("/login");
-      if (authenticated && pathname === "/login") router.replace("/");
-    });
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSignedIn(Boolean(session));
-      if (!session && !authPage) router.replace("/login");
-      if (session && pathname === "/login") router.replace("/");
-    });
+      if (!hasSession && !authPage && !publicPage) router.replace("/login");
+      if (hasSession && (authPage || pathname === "/")) router.replace("/app");
+    };
+    void supabase.auth.getSession().then(({ data }) => applySession(Boolean(data.session)));
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => applySession(Boolean(session)));
     return () => { active = false; subscription.subscription.unsubscribe(); };
-  }, [pathname, router, authPage]);
+  }, [pathname, router, authPage, publicPage]);
 
-  if (!ready && (supabaseAuthEnabled || signedIn)) {
+  if (!ready && supabaseAuthEnabled) {
+    return <div className="flex h-screen items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
+  }
+  if (supabaseAuthEnabled && ready && signedIn && (authPage || pathname === "/")) {
     return <div className="flex h-screen items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
   }
   if (supabaseAuthEnabled && authPage) return <>{children}</>;

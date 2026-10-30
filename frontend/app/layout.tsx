@@ -10,6 +10,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "ClosedAI",
   description: "Personal AI answers grounded in your uploaded files.",
+  openGraph: {
+    title: "ClosedAI",
+    description: "Study smarter from your own notes with cited answers.",
+    type: "website",
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -37,6 +37,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [thinking, setThinking] = useState(false);
   const controller = useRef<AbortController | null>(null);
@@ -171,6 +172,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
           }
           if (eventName === "error") {
             const message = typeof record.message === "string" ? record.message : "The chat request failed.";
+            setLimitReached(record.code === "limit_reached");
             terminal = true;
             setError(`I couldn't complete that: ${message}`);
           }
@@ -206,6 +208,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
         })}
         {streaming && thinking && <ThinkingIndicator status={workingStatus} />}
         {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-300/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 backdrop-blur"><span>{error}</span>{lastMessage && <button type="button" onClick={() => void send(lastMessage)} disabled={streaming} className="shrink-0 rounded-full bg-white/10 px-3 py-1 font-semibold text-white hover:bg-white/15">Retry</button>}</div>}
+        {limitReached && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-amber-300/40 bg-amber-950/85 px-4 py-3 text-sm text-white backdrop-blur"><span>You’ve reached your current allowance. Add tokens to keep chatting.</span><a href="/upgrade" className="shrink-0 rounded-full bg-white px-3 py-1 font-semibold text-slate-950">Upgrade</a></div>}
         <div ref={bottom} />
       </div>
     </div>

@@ -20,7 +20,9 @@ from app.db.models import User
 from app.db.session import get_engine
 from app.api_units import router as units_router
 from app.api_billing import router as billing_router
+from app.api_account import router as account_router
 from app.db.models import Unit
+from app.rate_limit import rate_limit
 
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 request_id_context: ContextVar[str] = ContextVar("request_id", default="")
@@ -58,7 +60,33 @@ root_logger.handlers.clear()
 root_logger.addHandler(handler)
 
 settings = get_settings()
-app = FastAPI(title="ClosedAI", version="0.1.0")
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+        def scrub_sentry(event, hint):
+            request = event.get("request", {})
+            request.pop("data", None)
+            headers = request.get("headers", {})
+            for name in list(headers):
+                if name.lower() in {"authorization", "cookie", "x-api-key"}:
+                    headers.pop(name, None)
+            return event
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            send_default_pii=False,
+            traces_sample_rate=0.0,
+            before_send=scrub_sentry,
+            before_breadcrumb=lambda crumb, hint: None,
+        )
+    except ImportError:
+        logging.getLogger(__name__).warning("SENTRY_DSN is set but sentry-sdk is not installed")
+app = FastAPI(
+    title="ClosedAI",
+    version="0.1.0",
+    docs_url="/docs" if settings.mode != "hosted" or settings.enable_docs else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if settings.mode != "hosted" or settings.enable_docs else None,
+)
 
 
 def validate_startup_config() -> None:
@@ -66,9 +94,11 @@ def validate_startup_config() -> None:
         raise RuntimeError("Hosted mode requires AUTH_PROVIDER=supabase (AUTH_PROVIDER=none is not supported).")
     if settings.auth_provider == "supabase" and not settings.supabase_url.strip():
         raise RuntimeError("AUTH_PROVIDER=supabase requires SUPABASE_URL.")
+    origins = [origin.strip().lower() for origin in settings.cors_origins]
+    if settings.mode == "hosted" and ("*" in origins or any(origin.startswith(("http://localhost", "http://127.0.0.1")) for origin in origins)):
+        raise RuntimeError("Hosted mode does not allow wildcard or localhost CORS origins.")
 
 
-validate_startup_config()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -80,6 +110,7 @@ app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(units_router)
 app.include_router(billing_router)
+app.include_router(account_router)
 
 
 @app.middleware("http")
@@ -88,10 +119,21 @@ async def request_logging_middleware(request: Request, call_next):
     request.state.request_id = request_id
     token = request_id_context.set(request_id)
     try:
+        if request.url.path in {"/documents/upload-url", "/documents/register"} and not request.headers.get("Authorization"):
+            rate_limit(
+                f"ip-upload:{request.client.host if request.client else 'unknown'}",
+                20,
+                3600,
+                "Too many upload attempts from this address. Please try again later.",
+            )
         response = await call_next(request)
     finally:
         request_id_context.reset(token)
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.headers.get("Authorization"):
+        response.headers["Cache-Control"] = "no-store"
     logging.getLogger("closedai.request").info(
         "request method=%s path=%s status=%s",
         request.method,
@@ -107,6 +149,13 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     if exc.status_code == 402 and isinstance(exc.detail, dict):
         return JSONResponse(status_code=402, content=exc.detail)
     request_id = getattr(request.state, "request_id", str(uuid4()))
+    if exc.status_code == 401:
+        logging.getLogger("closedai.auth").warning(
+            "authentication rejected path=%s reason=%s request_id=%s",
+            request.url.path,
+            exc.detail if isinstance(exc.detail, str) else "unauthorized",
+            request_id,
+        )
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "request_id": request_id}, headers={"X-Request-ID": request_id})
 
 
@@ -149,9 +198,35 @@ def _warm_embedding_model() -> None:
         logging.getLogger(__name__).warning("Embedding model warm-up failed: %s", exc)
 
 
+def validate_embedding_dimension() -> None:
+    settings = get_settings()
+    if settings.mode != "hosted":
+        return
+    with get_engine().connect() as connection:
+        dimension = connection.execute(text(
+            """
+            SELECT a.atttypmod
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relname = 'chunks'
+              AND a.attname = 'embedding'
+              AND NOT a.attisdropped
+            """
+        )).scalar_one_or_none()
+    if dimension is not None and int(dimension) != settings.embedding_dim:
+        raise RuntimeError(
+            f"Database embedding vector dimension is {dimension}, but EMBEDDING_DIM={settings.embedding_dim}. "
+            "Run migrations or recreate the chunks embedding column with the configured dimension."
+        )
+
+
 @app.on_event("startup")
 def startup_tasks() -> None:
     """Create the fixed self-hosted user when it does not exist."""
+    validate_startup_config()
+    validate_embedding_dimension()
     recover_interrupted_documents()
     if settings.mode == "selfhosted":
         from uuid import UUID
@@ -168,10 +243,16 @@ def startup_tasks() -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    """Report API health, deployment mode, and database connectivity."""
+    """Report cheap liveness without touching the database."""
+    return {"status": "ok", "mode": settings.mode, "version": app.version or "unknown"}
+
+
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    """Report readiness based on database connectivity."""
     with get_engine().connect() as connection:
         connection.execute(text("SELECT 1"))
-    return {"status": "ok", "mode": settings.mode, "version": app.version or "unknown"}
+    return {"status": "ready"}
 
 
 # TODO: Add upload, ingestion, search, and conversation routes.
