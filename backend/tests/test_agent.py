@@ -79,12 +79,37 @@ def test_agent_stream_emits_status_and_answer(monkeypatch) -> None:
     monkeypatch.setattr(
         agent_module.RetrievalAgent,
         "answer",
-        lambda self, user_id, message, history=None, unit_id=None: ("Answer complete", []),
+        lambda self, user_id, message, history=None, unit_id=None, retrieval_events=None: ("Answer complete", []),
     )
     events = list(agent_module.RetrievalAgent(client=object()).answer_stream(
         "00000000-0000-0000-0000-000000000001",
         "hello",
         unit_id="00000000-0000-0000-0000-000000000002",
     ))
-    assert events[0] == {"type": "status", "text": "Searching your notes..."}
+    assert events[0]["phase"] == "embedding"
+    assert events[0]["results"] == []
+    assert events[0]["count"] == 0
     assert events[-1] == "Answer complete"
+
+
+def test_agent_stream_emits_structured_retrieval_status(monkeypatch) -> None:
+    def fake_answer(self, user_id, message, history=None, unit_id=None, retrieval_events=None):
+        retrieval_events.append({
+            "phase": "searching",
+            "query": "policy",
+            "results": [{"filename": "policy.pdf", "page": 3, "score": 0.9}],
+            "count": 1,
+        })
+        return "Answer complete", []
+
+    monkeypatch.setattr(agent_module.RetrievalAgent, "answer", fake_answer)
+    events = list(agent_module.RetrievalAgent(client=object()).answer_stream(
+        "00000000-0000-0000-0000-000000000001",
+        "What is the policy?",
+        unit_id="00000000-0000-0000-0000-000000000002",
+    ))
+    retrieval = events[1]
+    assert retrieval["phase"] == "searching"
+    assert retrieval["query"] == "policy"
+    assert retrieval["count"] == 1
+    assert retrieval["results"] == [{"filename": "policy.pdf", "page": 3, "score": 0.9}]

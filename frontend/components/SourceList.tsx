@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { Source } from "../lib/api";
+import { parseCitations } from "../lib/messageText";
 
 export function SourceList({ sources }: { sources: Source[] | null }) {
   const [open, setOpen] = useState(false);
@@ -35,20 +36,17 @@ export function SourceList({ sources }: { sources: Source[] | null }) {
 
 export function inlineSources(text: string, sources: Source[] | null): ReactNode[] {
   if (!sources?.length) return [text];
-  const citation = /\[(?:([^,\]\n]+),\s*)?page\s+(\d+)\]/gi;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = citation.exec(text)) !== null) {
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
-    const filename = match[1]?.trim();
-    const page = Number(match[2]);
+  for (const citation of parseCitations(text)) {
+    if (citation.start > lastIndex) parts.push(text.slice(lastIndex, citation.start));
+    const { filename, page } = citation;
     const sourceIndex = filename
       ? sources.findIndex(source => source.filename === filename && source.page === page)
       : sources.findIndex(source => source.page === page);
-    const key = `${match.index}-${filename ?? "page"}-${page}`;
+    const key = `${citation.start}-${filename ?? "page"}-${page}`;
     parts.push(<button key={key} type="button" onClick={() => window.dispatchEvent(new CustomEvent("closedai:open-source", { detail: Math.max(sourceIndex, 0) }))} className="mx-0.5 inline-flex translate-y-[-1px] rounded-full bg-blue-400/15 px-2 py-0.5 text-xs font-medium text-blue-200 hover:bg-blue-400/25">Source {Math.max(sourceIndex, 0) + 1}</button>);
-    lastIndex = citation.lastIndex;
+    lastIndex = citation.end;
   }
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts;

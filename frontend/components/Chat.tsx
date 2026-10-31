@@ -1,13 +1,17 @@
 "use client";
 
-import { Children, cloneElement, FormEvent, isValidElement, KeyboardEvent, ReactElement, ReactNode, useEffect, useRef, useState } from "react";
+import { Children, cloneElement, FormEvent, isValidElement, KeyboardEvent, memo, ReactElement, ReactNode, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { usePathname, useRouter } from "next/navigation";
 import { api, Source } from "../lib/api";
 import { inlineSources, SourceList } from "./SourceList";
 import { ThinkingIndicator } from "./ThinkingIndicator";
-import { CrawlerCanvas } from "./crawler/CrawlerCanvas";
+import dynamic from "next/dynamic";
+import { tokenizeWords } from "../lib/messageText";
+import type { CrawlerStatus } from "../lib/crawler";
+
+const CrawlerCanvas = dynamic(() => import("./crawler/CrawlerCanvas").then(module => module.CrawlerCanvas), { ssr: false });
 
 function MarkdownInline({ children, sources }: { children: ReactNode; sources: Source[] | null }) {
   return <>{Children.map(children, child => {
@@ -19,6 +23,16 @@ function MarkdownInline({ children, sources }: { children: ReactNode; sources: S
 
 interface DisplayMessage { id: string; role: "user" | "assistant"; content: string; sources: Source[] | null }
 interface SelectionButton { text: string; left: number; top: number }
+
+const MessageItem = memo(function MessageItem({ message, streaming }: { message: DisplayMessage; streaming: boolean }) {
+  const parsed = message.role === "user" ? splitQuotedMessage(message.content) : null;
+  return <article className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+    <div className={`max-w-[85%] px-2 py-2 ${message.role === "user" ? "rounded-2xl bg-white/15 text-white backdrop-blur-md" : "w-full max-w-3xl text-slate-100"}`}>
+      {message.role === "assistant" ? <div data-assistant-message className="prose prose-sm prose-slate dark:prose-invert max-w-none leading-7"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{p: ({children}) => <p><MarkdownInline sources={message.sources}>{children}</MarkdownInline></p>, li: ({children}) => <li><MarkdownInline sources={message.sources}>{children}</MarkdownInline></li>, h1: ({children}) => <h1><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h1>, h2: ({children}) => <h2><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h2>, h3: ({children}) => <h3><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h3>}}>{message.content}</ReactMarkdown></div> : parsed && <div className="text-sm leading-relaxed">{parsed.quote && <blockquote className="mb-2 max-w-md border-l-2 border-slate-300/60 pl-3 text-xs text-[#a9b3c7] whitespace-pre-wrap">{parsed.quote}</blockquote>}<p className="whitespace-pre-wrap">{parsed.question}</p></div>}
+      {message.role === "assistant" && !streaming && <SourceList sources={message.sources} />}
+    </div>
+  </article>;
+});
 
 function splitQuotedMessage(content: string): { quote: string | null; question: string } {
   if (!content.startsWith("> ")) return { quote: null, question: content };
@@ -53,6 +67,10 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   const [workingStatus, setWorkingStatus] = useState<string | undefined>(undefined);
   const [searchWords, setSearchWords] = useState<string[]>([]);
   const [crawlerVisible, setCrawlerVisible] = useState(false);
+  const [crawlerStatus, setCrawlerStatus] = useState<CrawlerStatus | undefined>();
+  const [crawlerDocuments, setCrawlerDocuments] = useState<string[]>([]);
+  const streamBuffer = useRef("");
+  const streamFrame = useRef<number | null>(null);
 
   useEffect(() => {
     function nodeIsInsideAssistant(node: Node | null): boolean {
@@ -96,14 +114,16 @@ export function Chat({ conversationId }: { conversationId?: string }) {
 
     if (!conversationId) { setLoading(false); return; }
     setLoading(true);
-    api.conversation(conversationId).then(items => {
-      setMessages(items.map(item => ({
+    const request = new AbortController();
+    api.conversation(conversationId, request.signal).then(items => {
+      if (!request.signal.aborted) setMessages(items.map(item => ({
         id: item.id,
         role: item.role,
         content: item.content,
         sources: item.sources,
       })));
-    }).catch(() => setError("Could not load this conversation.")).finally(() => setLoading(false));
+    }).catch(() => { if (!request.signal.aborted) setError("Could not load this conversation."); }).finally(() => { if (!request.signal.aborted) setLoading(false); });
+    return () => request.abort();
   }, [conversationId]);
 
   useEffect(() => {
@@ -144,10 +164,11 @@ export function Chat({ conversationId }: { conversationId?: string }) {
         const unitId = window.localStorage.getItem("closedai-unit-id");
         const documents = unitId ? await api.documents(unitId) : [];
         const names = documents.map(document => document.filename.replace(/\.[^.]+$/, ""));
-        const questionWords = question.toLowerCase().match(/[a-z0-9]{3,}/g)?.slice(0, 12) ?? [];
+        setCrawlerDocuments(names);
+        const questionWords = tokenizeWords(question, 12);
         setSearchWords(names.length ? [...names, ...questionWords] : [...questionWords, "notes", "slides", "past papers", "answers", "sources"]);
       } catch {
-        setSearchWords([...question.toLowerCase().match(/[a-z0-9]{3,}/g)?.slice(0, 12) ?? [], "notes", "slides", "past papers"]);
+        setSearchWords([...tokenizeWords(question, 12), "notes", "slides", "past papers"]);
       }
     })();
     setMessages(current => [...current, { id: crypto.randomUUID(), role: "user", content: message, sources: null }, { id: crypto.randomUUID(), role: "assistant", content: "", sources: null }]);
@@ -174,9 +195,28 @@ export function Chat({ conversationId }: { conversationId?: string }) {
             setThinking(false);
             setWorkingStatus(undefined);
             setCrawlerVisible(false);
-            setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, content: item.content + String(record.text ?? "") } : item));
+            streamBuffer.current += String(record.text ?? "");
+            if (streamFrame.current === null) {
+              streamFrame.current = window.requestAnimationFrame(() => {
+                streamFrame.current = null;
+                const text = streamBuffer.current;
+                streamBuffer.current = "";
+                setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, content: item.content + text } : item));
+              });
+            }
           }
-          if (eventName === "status") { setThinking(true); setWorkingStatus(typeof record.text === "string" ? record.text : "Searching your notes..."); }
+          if (eventName === "status") {
+            setThinking(true);
+            setWorkingStatus(typeof record.text === "string" ? record.text : "Searching your notes...");
+            if (["embedding", "searching", "reading", "writing"].includes(String(record.phase))) {
+              setCrawlerStatus({
+                phase: record.phase as CrawlerStatus["phase"],
+                query: typeof record.query === "string" ? record.query : "",
+                results: Array.isArray(record.results) ? record.results.filter((item): item is CrawlerStatus["results"][number] => Boolean(item && typeof item === "object" && typeof (item as { filename?: unknown }).filename === "string" && typeof (item as { page?: unknown }).page === "number")) : [],
+                count: typeof record.count === "number" ? record.count : 0,
+              });
+            }
+          }
           if (eventName === "sources") setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, sources: data as Source[] } : item));
           if (eventName === "done" && typeof record.conversation_id === "string") {
             terminal = true;
@@ -213,21 +253,38 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
     <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
       {crawlerVisible && <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden bg-slate-950/45" aria-live="polite">
-        <CrawlerCanvas mode="search" words={searchWords} />
-        <p className="absolute left-1/2 top-[58%] -translate-x-1/2 whitespace-nowrap bg-slate-950/75 px-3 py-1 text-sm font-medium text-sky-100">Searching your notes...</p>
+        <CrawlerCanvas mode="search" words={searchWords} documents={crawlerDocuments} status={crawlerStatus} />
+        <div className="absolute left-3 right-3 top-3 flex items-center gap-3 border border-white/10 bg-slate-950/80 px-3 py-2 font-mono text-[11px] text-slate-300">
+          <span className="font-semibold text-teal-200">closedai-crawler</span>
+          <span>{crawlerStatus?.phase ?? "embedding"}</span>
+          <span className="truncate text-pink-200">{crawlerStatus?.query ?? "ambient scan"}</span>
+        </div>
+        <div className="absolute bottom-3 left-3 right-3 grid grid-cols-3 gap-2 font-mono text-[10px] text-slate-300">
+          <section className="min-h-24 border border-white/10 bg-slate-950/85 p-2">
+            <h2 className="text-white">CRAWL LOG</h2>
+            <p>{crawlerStatus?.phase === "searching" ? `searching: ${crawlerStatus.query}` : `${crawlerStatus?.phase ?? "embedding"}: ambient scan`}</p>
+            {crawlerStatus?.results.map(result => <p key={`${result.filename}-${result.page}`} className="truncate">found 1 in {result.filename}, page {result.page}</p>)}
+          </section>
+          <section className="border border-white/10 bg-slate-950/85 p-2">
+            <h2 className="text-white">DOCUMENTS</h2>
+            {crawlerDocuments.map(filename => {
+              const count = crawlerStatus?.results.filter(result => result.filename === filename || result.filename.replace(/\.[^.]+$/, "") === filename).length ?? 0;
+              return <div key={filename} className="mt-1"><div className="flex justify-between"><span className="truncate">{filename}</span><span>{count}</span></div><div className="h-px bg-white/10"><div className="h-px bg-teal-300" style={{ width: `${count ? Math.min(100, 100 / Math.max(1, count)) : 0}%` }} /></div></div>;
+            })}
+          </section>
+          <section className="border border-white/10 bg-slate-950/85 p-2">
+            <h2 className="text-white">MATCHES</h2>
+            {crawlerDocuments.map(filename => {
+              const count = crawlerStatus?.results.filter(result => result.filename === filename || result.filename.replace(/\.[^.]+$/, "") === filename).length ?? 0;
+              return count > 0 ? <div key={filename} className="mt-1 flex items-center gap-2"><span className="w-20 truncate">{filename}</span><div className="h-1 flex-1 bg-white/10"><div className="h-1 bg-pink-300" style={{ width: `${Math.min(100, count * 20)}%` }} /></div></div> : null;
+            })}
+          </section>
+        </div>
       </div>}
       <div className="mx-auto max-w-3xl space-y-5">
         {loading && <div className="h-24 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />}
         {!loading && messages.length === 0 && <div className="py-20 text-center"><h1 className="text-2xl font-semibold">What are we exploring?</h1><p className="mt-2 rounded-md bg-slate-950/70 px-3 py-1.5 text-slate-200 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">Ask a question grounded in your uploaded documents.</p></div>}
-        {messages.map(message => {
-          const parsed = message.role === "user" ? splitQuotedMessage(message.content) : null;
-          return <article key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] px-2 py-2 ${message.role === "user" ? "rounded-2xl bg-white/15 text-white backdrop-blur-md" : "w-full max-w-3xl text-slate-100"}`}>
-              {message.role === "assistant" ? <div data-assistant-message className="prose prose-sm prose-slate dark:prose-invert max-w-none leading-7"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{p: ({children}) => <p><MarkdownInline sources={message.sources}>{children}</MarkdownInline></p>, li: ({children}) => <li><MarkdownInline sources={message.sources}>{children}</MarkdownInline></li>, h1: ({children}) => <h1><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h1>, h2: ({children}) => <h2><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h2>, h3: ({children}) => <h3><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h3>}}>{message.content}</ReactMarkdown></div> : parsed && <div className="text-sm leading-relaxed">{parsed.quote && <blockquote className="mb-2 max-w-md border-l-2 border-slate-300/60 pl-3 text-xs text-[#a9b3c7] whitespace-pre-wrap">{parsed.quote}</blockquote>}<p className="whitespace-pre-wrap">{parsed.question}</p></div>}
-              {message.role === "assistant" && !streaming && <SourceList sources={message.sources} />}
-            </div>
-          </article>;
-        })}
+        {messages.map(message => <MessageItem key={message.id} message={message} streaming={streaming} />)}
         {streaming && thinking && <ThinkingIndicator status={workingStatus} />}
         {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-300/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 backdrop-blur"><span>{error}</span>{lastMessage && <button type="button" onClick={() => void send(lastMessage)} disabled={streaming} className="shrink-0 rounded-full bg-white/10 px-3 py-1 font-semibold text-white hover:bg-white/15">Retry</button>}</div>}
         {limitReached && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-amber-300/40 bg-amber-950/85 px-4 py-3 text-sm text-white backdrop-blur"><span>You’ve reached your current allowance. Add tokens to keep chatting.</span><a href="/upgrade" className="shrink-0 rounded-full bg-white px-3 py-1 font-semibold text-slate-950">Upgrade</a></div>}

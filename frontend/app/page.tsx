@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { CrawlerCanvas } from "../components/crawler/CrawlerCanvas";
+import dynamic from "next/dynamic";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
+
+const CrawlerCanvas = dynamic(() => import("../components/crawler/CrawlerCanvas").then(module => module.CrawlerCanvas), { ssr: false });
 
 export default function Home() {
   if (!supabaseAuthEnabled) return <LandingPage signedIn={false} />;

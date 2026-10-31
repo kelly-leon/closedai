@@ -1,4 +1,5 @@
 import { supabase, supabaseAuthEnabled } from "./supabase";
+import { sharedGet, invalidateShared } from "./sharedData";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -105,19 +106,19 @@ export const api = {
   rejectPayment: (id: string, reason: string) => request<{ status: string }>(`/admin/requests/${id}/reject`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) }),
   adminGrant: (email: string, tokens: number, premiumDays: number, note: string) => request<{ status: string }>("/admin/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, tokens, premium_days: premiumDays, note }) }),
   adminUsageSummary: () => request<{ last_7_days: UsageSummary; last_30_days: UsageSummary }>("/admin/usage-summary"),
-  units: () => request<Unit[]>("/units"),
+  units: () => sharedGet("units", () => request<Unit[]>("/units")),
   createUnit: (name: string) => request<Unit>("/units", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
   renameUnit: (id: string, name: string) => request<Unit>(`/units/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
   deleteUnit: (id: string) => request<void>(`/units/${id}`, { method: "DELETE" } ),
-  usage: () => request<Usage>("/me/usage"),
+  usage: () => sharedGet("usage", () => request<Usage>("/me/usage")),
   deleteAccount: () => request<{ deleted: boolean }>("/me", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirm: "DELETE" }),
   }),
   redeem: (code: string) => request<Usage>("/redeem", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) }),
-  conversations: (unitId: string) => request<ConversationSummary[]>(`/conversations?unit_id=${encodeURIComponent(unitId)}`),
-  conversation: (id: string) => request<Message[]>(`/conversations/${id}`),
+  conversations: (unitId: string) => sharedGet(`conversations:${unitId}`, () => request<ConversationSummary[]>(`/conversations?unit_id=${encodeURIComponent(unitId)}`)),
+  conversation: (id: string, signal?: AbortSignal) => sharedGet(`conversation:${id}`, () => request<Message[]>(`/conversations/${id}`, { signal })),
   deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: "DELETE" }),
   chatStream: async (message: string, conversationId: string | undefined, unitId: string, signal: AbortSignal) => {
     const headers = new Headers({ "Content-Type": "application/json" });
@@ -142,7 +143,7 @@ export const api = {
     }
     return response;
   },
-  documents: (unitId: string) => request<DocumentItem[]>(`/documents?unit_id=${encodeURIComponent(unitId)}`),
+  documents: (unitId: string) => sharedGet(`documents:${unitId}`, () => request<DocumentItem[]>(`/documents?unit_id=${encodeURIComponent(unitId)}`)),
   uploadDocumentUrl: (file: File, unitId: string) => request<{ upload_url: string; token: string; storage_path: string }>("/documents/upload-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

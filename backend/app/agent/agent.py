@@ -49,7 +49,7 @@ class RetrievalAgent:
         self.client = client or anthropic.Anthropic(api_key=settings.anthropic_api_key)
         self.settings = settings
 
-    def answer(self, user_id: UUID | str, message: str, history: list[dict[str, str]] | None = None, unit_id: UUID | str | None = None) -> tuple[str, list[dict[str, Any]]]:
+    def answer(self, user_id: UUID | str, message: str, history: list[dict[str, str]] | None = None, unit_id: UUID | str | None = None, retrieval_events: list[dict[str, Any]] | None = None) -> tuple[str, list[dict[str, Any]]]:
         """Answer a message and return the final text and retrieved source chunks."""
         if unit_id is None:
             raise ValueError("unit_id is required for document search")
@@ -90,6 +90,13 @@ class RetrievalAgent:
                 logger.info("search_documents tool call: user=%s query=%r", user_id, query)
                 matches = search_chunks(user_id, query, unit_id=unit_id)
                 logger.info("search_documents result: user=%s query=%r count=%d", user_id, query, len(matches))
+                if retrieval_events is not None:
+                    retrieval_events.append({
+                        "phase": "searching",
+                        "query": query,
+                        "results": [{"filename": match["filename"], "page": match["page_number"], "score": match.get("similarity")} for match in matches],
+                        "count": len(matches),
+                    })
                 for match in matches:
                     if match not in sources:
                         sources.append(match)
@@ -103,8 +110,13 @@ class RetrievalAgent:
 
     def answer_stream(self, user_id: UUID | str, message: str, history: list[dict[str, str]] | None = None, unit_id: UUID | str | None = None) -> Iterator[dict[str, Any] | str]:
         """Stream status and answer text, using the tool loop for retrieval."""
-        yield {"type": "status", "text": "Searching your notes..."}
-        answer, self.sources = self.answer(user_id, message, history, unit_id=unit_id)
+        yield {"type": "status", "text": "Embedding your query...", "phase": "embedding", "query": message, "results": [], "count": 0}
+        retrieval_events: list[dict[str, Any]] = []
+        answer, self.sources = self.answer(user_id, message, history, unit_id=unit_id, retrieval_events=retrieval_events)
+        for event in retrieval_events:
+            yield {"type": "status", "text": f"Found {event['count']} result(s).", **event}
+        if not retrieval_events:
+            yield {"type": "status", "text": "Searching your notes...", "phase": "searching", "query": message, "results": [], "count": 0}
         yield answer
 
 

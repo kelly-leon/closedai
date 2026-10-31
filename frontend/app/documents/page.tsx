@@ -4,6 +4,7 @@ import Link from "next/link";
 import { DragEvent, useEffect, useRef, useState } from "react";
 import { api, ApiError, DocumentItem } from "../../lib/api";
 import { supabaseAuthEnabled } from "../../lib/supabase";
+import { sharedGet, invalidateShared } from "../../lib/sharedData";
 
 interface UploadState { name: string; progress: number; file?: File; error?: string; retryable?: boolean }
 const allowed = new Set(["pdf", "docx", "txt", "md"]);
@@ -21,7 +22,7 @@ export default function DocumentsPage() {
   async function load() {
     const selected = window.localStorage.getItem("closedai-unit-id");
     if (!selected) return;
-    try { setDocuments(await api.documents(selected)); } catch { /* Keep existing content visible. */ } finally { setLoading(false); }
+    try { setDocuments(await sharedGet(`documents:${selected}`, () => api.documents(selected))); } catch { /* Keep existing content visible. */ } finally { setLoading(false); }
   }
   useEffect(() => {
     const selected = window.localStorage.getItem("closedai-unit-id") ?? "";
@@ -34,7 +35,10 @@ export default function DocumentsPage() {
   useEffect(() => { if (unitId) void load(); }, [unitId]);
   useEffect(() => {
     if (!documents.some(document => document.status === "pending" || document.status === "processing")) return;
-    const timer = window.setInterval(() => void load(), 3000);
+    const timer = window.setInterval(() => {
+      invalidateShared(`documents:${unitId}`);
+      void load();
+    }, 3000);
     return () => window.clearInterval(timer);
   }, [documents]);
 
@@ -52,6 +56,7 @@ export default function DocumentsPage() {
         } else {
           await api.uploadDocument(file, unitId, progress => setUploads(current => current.map(item => item.name === file.name ? { ...item, progress } : item)));
         }
+        invalidateShared(`documents:${unitId}`);
         await load();
       }
       catch (error) {

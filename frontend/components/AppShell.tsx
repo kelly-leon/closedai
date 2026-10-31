@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ApiError, api, ConversationSummary, Unit, Usage } from "../lib/api";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
+import { sharedGet, invalidateShared } from "../lib/sharedData";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -28,11 +29,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     try { setConversations(await api.conversations(unitId)); } catch { setConversations([]); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, [pathname]);
   async function loadWorkspace() {
     setInitialError("");
     try {
-      const [items, currentUsage] = await Promise.all([api.units(), api.usage()]);
+      const [items, currentUsage] = await Promise.all([
+        sharedGet("units", api.units),
+        sharedGet("usage", api.usage),
+      ]);
       setUnits(items);
       setUsage(currentUsage);
       const saved = window.localStorage.getItem("closedai-unit-id");
