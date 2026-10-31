@@ -34,6 +34,10 @@ Set `NEXT_PUBLIC_API_URL=http://localhost:8000` in `.env` to point the frontend 
 
 For hosted Supabase authentication, set `MODE=hosted`, `AUTH_PROVIDER=supabase`, `SUPABASE_URL=https://your-project.supabase.co`, and the optional asymmetric/shared JWT settings. In the frontend, set `NEXT_PUBLIC_AUTH_MODE=supabase` and provide `NEXT_PUBLIC_SUPABASE_URL` and the public `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Never configure the Supabase service-role key in the frontend. Google sign-in is optional through `NEXT_PUBLIC_GOOGLE_AUTH=true`.
 
+### Supabase production URL configuration
+
+In Supabase **Authentication > URL Configuration**, set **Site URL** to the exact production HTTPS origin (for example, `https://closedai.example.com`) and add that same origin to **Redirect URLs**, with `/auth/reset` allowed explicitly when using URL allowlisting. Also add each production `/auth/reset` URL as a redirect URL. Keep `https://localhost:3000/auth/reset` only for local development.
+
 Hosted document uploads also require the server-only `SUPABASE_SERVICE_KEY`, and use the private bucket configured by `SUPABASE_BUCKET` (for example, `documents`). Do not add the service-role key to any `NEXT_PUBLIC_*` frontend variable.
 
 Pre-existing selfhosted documents and chats belong to the fixed selfhosted default user and are not migrated or shared with Supabase users. Each Supabase user starts with their own private data.

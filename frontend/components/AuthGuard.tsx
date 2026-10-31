@@ -20,7 +20,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       setSignedIn(hasSession);
       setReady(true);
       if (!hasSession && !authPage && !publicPage) router.replace("/login");
-      if (hasSession && authPage) router.replace("/app");
+      if (hasSession && authPage && pathname !== "/auth/reset") router.replace("/app");
     };
     void supabase.auth.getSession().then(({ data }) => applySession(Boolean(data.session)));
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => applySession(Boolean(session)));

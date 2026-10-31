@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { AuthShell } from "../../components/auth/AuthShell";
 
@@ -11,6 +11,10 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState(false);
+  useEffect(() => {
+    setResetSuccess(new URLSearchParams(window.location.search).get("reset") === "success");
+  }, []);
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
@@ -27,6 +31,7 @@ export default function LoginPage() {
   return <AuthShell><form onSubmit={submit} className="auth-form" noValidate>
     <p className="auth-eyebrow">Welcome back</p>
     <h1>Sign in to<br />ClosedAI.</h1>
+    {resetSuccess && <p role="status" className="auth-message auth-success">Password updated successfully. Sign in with your new password.</p>}
     {error && <p role="alert" className="auth-message auth-error">Error: {error}</p>}
     <div className="auth-field">
       <input id="login-email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder=" " autoComplete="email" />
