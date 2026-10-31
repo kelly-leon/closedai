@@ -20,7 +20,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       setSignedIn(hasSession);
       setReady(true);
       if (!hasSession && !authPage && !publicPage) router.replace("/login");
-      if (hasSession && (authPage || pathname === "/")) router.replace("/app");
+      if (hasSession && authPage) router.replace("/app");
     };
     void supabase.auth.getSession().then(({ data }) => applySession(Boolean(data.session)));
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => applySession(Boolean(session)));
@@ -30,7 +30,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!ready && supabaseAuthEnabled) {
     return <div className="flex h-screen items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
   }
-  if (supabaseAuthEnabled && ready && signedIn && (authPage || pathname === "/")) {
+  if (supabaseAuthEnabled && ready && signedIn && authPage) {
     return <div className="flex h-screen items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
   }
   if (supabaseAuthEnabled && authPage) return <>{children}</>;

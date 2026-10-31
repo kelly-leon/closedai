@@ -32,66 +32,100 @@ function LandingPage({ signedIn }: { signedIn: boolean }) {
   const github = process.env.NEXT_PUBLIC_GITHUB_URL ?? "";
   const action = signedIn ? "Open app" : "Get started";
   const destination = signedIn ? "/app" : "/signup";
+  const [activeDemo, setActiveDemo] = useState("Ask");
+  const demos: Record<string, { note: string; detail: string }> = {
+    Ask: { note: "What explains recursive descent parsing?", detail: "An answer drawn from your lecture notes, with the source attached." },
+    Cite: { note: "Recursive descent parses top-down...", detail: "Every claim links back to the exact page and passage." },
+    Organize: { note: "Data Structures / Week 07", detail: "Keep readings, slides, and past papers grouped by unit." },
+    Review: { note: "Topics I should revisit", detail: "Turn your course material into a focused study checklist." },
+  };
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#05090b] text-white">
+    <div className="landing-page relative min-h-screen overflow-hidden text-white">
       <CrawlerCanvas mode="ambient" className="pointer-events-none fixed inset-0 z-0" />
-      <header className="relative z-10">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-5">
-          <Link href="/" className="text-xl font-bold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">ClosedAI</Link>
-          <nav aria-label="Primary" className="hidden gap-7 text-sm text-slate-200 md:flex">
-            <a href="#what" className="focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">What it does</a>
-            <a href="#faq" className="focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">FAQ</a>
+      <header className="landing-header sticky top-0 z-30">
+        <div className="mx-auto flex max-w-[1240px] items-center justify-between px-5 py-4 md:px-8">
+          <Link href="/" className="landing-wordmark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#b9ff66]">ClosedAI</Link>
+          <nav aria-label="Primary" className="hidden items-center gap-8 text-sm text-[#d9d4dc] md:flex">
+            <a href="#what" className="nav-link">What it does</a>
+            <a href="#how" className="nav-link">How it works</a>
+            <a href="#faq" className="nav-link">FAQ</a>
           </nav>
-          <div className="flex items-center gap-5 text-sm">
-            {!signedIn && <Link href="/login" className="hover:text-sky-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">Log in</Link>}
-            <Link href={destination} className="font-semibold text-sky-300 hover:text-pink-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">{action} →</Link>
+          <div className="flex items-center gap-4 text-sm md:gap-6">
+            {!signedIn && <Link href="/login" className="nav-link hidden sm:block">Log in</Link>}
+            <Link href={destination} className="landing-button">{action}<span aria-hidden="true">↗</span></Link>
           </div>
         </div>
       </header>
       <main className="relative z-10">
-        <section className="mx-auto max-w-6xl px-5 pb-24 pt-24 md:pt-32">
-          <div className="max-w-3xl bg-gradient-to-r from-[#05090b]/95 via-[#05090b]/75 to-transparent py-5">
-            <h1 className="text-5xl font-bold leading-[0.95] md:text-7xl">Ask your whole course.</h1>
-            <p className="mt-7 max-w-2xl text-lg leading-8 text-slate-200 md:text-xl">Search notes, slides and past papers in one place. ClosedAI answers from your files and cites the exact page.</p>
-            <Link href={destination} className="mt-9 inline-block text-xl font-semibold text-sky-300 hover:text-pink-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">{action} →</Link>
+        <section className="hero mx-auto flex min-h-[760px] max-w-[1240px] flex-col justify-center px-5 py-24 md:px-8 md:py-32">
+          <div className="max-w-[980px]">
+            <p className="hero-kicker">Your course, finally connected</p>
+            <h1>Answers <em>from</em><br />your own notes.</h1>
+            <p className="hero-copy">Ask across lectures, readings and past papers—and get an answer you can trace.</p>
+          </div>
+          <div className="hero-question" role="search">
+            <span>Ask your files</span>
+            <p>Why do recursive descent parsers work top-down?</p>
+            <span aria-hidden="true" className="question-arrow">↗</span>
           </div>
         </section>
-        <section id="what" className="mx-auto max-w-6xl px-5 py-24">
-          <div className="max-w-3xl bg-gradient-to-r from-[#05090b]/95 to-transparent py-6">
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-pink-200">What it does</p>
-            <h2 className="mt-4 text-4xl font-bold md:text-5xl">A private reading companion for everything you study.</h2>
-            <p className="mt-6 text-lg leading-8 text-slate-200">Organize files into units per course, ask across your notes or one past paper, and follow every answer to its exact source page.</p>
+        <section id="what" className="landing-section mx-auto max-w-[1240px] px-5 md:px-8">
+          <p className="section-label">What it does</p>
+          <h2 className="sr-only">What ClosedAI does</h2>
+          <div className="statement-grid">
+            <p><strong>Cited answers.</strong><span>Follow every claim back to the source page.</span></p>
+            <p><strong>Units per course.</strong><span>Keep each class and semester in its own place.</span></p>
+            <p><strong>Your files stay private.</strong><span>Documents belong to you, not the open web.</span></p>
+            <p><strong>PDF, DOCX, TXT, MD.</strong><span>Bring the formats already in your study folder.</span></p>
           </div>
         </section>
-        <section className="mx-auto max-w-6xl px-5 py-24">
-          <h2 className="text-4xl font-bold">How it works</h2>
-          <ol className="mt-12 grid max-w-4xl gap-12 md:grid-cols-3">
-            {[["01", "Upload", "Add notes, slides or past papers to a course unit."], ["02", "Ask", "Ask in your own words across the files you chose."], ["03", "Get cited answers", "Read a clear answer, then open the exact cited page."]].map(([number, title, text]) => (
-              <li key={number}><span className="text-pink-200">{number}</span><h3 className="mt-3 text-2xl font-semibold">{title}</h3><p className="mt-3 leading-7 text-slate-300">{text}</p></li>
+        <section className="landing-section mx-auto max-w-[1240px] px-5 md:px-8" aria-labelledby="demo-title">
+          <div className="demo-heading">
+            <div>
+              <p className="section-label">One reading companion</p>
+              <h2 id="demo-title">From question<br />to understanding.</h2>
+            </div>
+            <div className="demo-tabs" role="tablist" aria-label="Product demo">
+              {Object.keys(demos).map((tab) => (
+                <button key={tab} role="tab" aria-selected={activeDemo === tab} className={activeDemo === tab ? "active" : ""} onClick={() => setActiveDemo(tab)}>{tab}</button>
+              ))}
+            </div>
+          </div>
+          <div className="demo-stage" role="tabpanel">
+            <div className={`demo-art art-${activeDemo.toLowerCase()}`} aria-hidden="true">
+              <span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-dot" />
+              <div className="document-note"><span>{activeDemo}</span><p>{demos[activeDemo].note}</p></div>
+            </div>
+            <p>{demos[activeDemo].detail}</p>
+          </div>
+        </section>
+        <section id="how" className="landing-section mx-auto max-w-[1240px] px-5 md:px-8">
+          <p className="section-label">How it works</p>
+          <ol className="steps">
+            {[["01", "Add", "Upload your notes, slides, readings and papers to a course unit."], ["02", "Ask", "Search across the material in your own words."], ["03", "Follow", "Read a clear answer and open the exact source behind it."]].map(([number, title, text]) => (
+              <li key={number}><span>{number}</span><h3>{title}</h3><p>{text}</p></li>
             ))}
           </ol>
         </section>
-        <section className="mx-auto max-w-6xl px-5 py-24">
-          <div className="bg-gradient-to-r from-[#05090b]/95 to-transparent py-4">
-            <h2 className="text-4xl font-bold">Bring your study files</h2>
-            <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-200">ClosedAI supports PDF, DOCX, TXT and Markdown. Files stay private to you by default.</p>
-          </div>
-        </section>
-        <section id="faq" className="mx-auto max-w-4xl px-5 py-24">
-          <h2 className="text-4xl font-bold">FAQ</h2>
-          <div className="mt-10 space-y-8">
-            {[["Are my files private?", "Your documents and conversations are scoped to your account and are private by default. AI providers process relevant text only when generating an answer."], ["Which file types can I upload?", "You can upload PDF, DOCX, TXT and Markdown files."]].map(([q, a]) => (
-              <details key={q}><summary className="cursor-pointer text-xl font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">{q}</summary><p className="mt-3 max-w-2xl leading-7 text-slate-300">{a}</p></details>
+        <section id="faq" className="landing-section faq-section mx-auto max-w-[1240px] px-5 md:px-8">
+          <p className="section-label">FAQ</p>
+          <h2>Common questions.</h2>
+          <div className="faq-list">
+            {[["Are my files private?", "Your documents and conversations are scoped to your account and are private by default. AI providers process relevant text only when generating an answer."], ["Which file types can I upload?", "You can upload PDF, DOCX, TXT and Markdown files."], ["Can ClosedAI read scanned files?", "Text-based PDFs work directly. Scanned PDFs depend on whether the pages contain searchable text or clear OCR output."]].map(([q, a]) => (
+              <details key={q}><summary>{q}<span aria-hidden="true">+</span></summary><p>{a}</p></details>
             ))}
           </div>
         </section>
       </main>
-      <footer className="relative z-10">
-        <div className="mx-auto flex max-w-6xl flex-wrap gap-7 px-5 py-10 text-sm text-slate-300">
-          <Link href="/privacy" className="hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">Privacy</Link>
-          <Link href="/terms" className="hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-300">Terms</Link>
+      <footer className="landing-footer relative z-10">
+        <div className="mx-auto flex max-w-[1240px] flex-wrap items-end justify-between gap-10 px-5 py-16 md:px-8">
+          <Link href="/" className="footer-wordmark">ClosedAI</Link>
+          <nav aria-label="Footer">
+          <Link href="/privacy">Privacy</Link>
+          <Link href="/terms">Terms</Link>
           {contact && <a href={`mailto:${contact}`} className="hover:text-white">Contact</a>}
           {github && <a href={github} target="_blank" rel="noreferrer" className="hover:text-white">GitHub</a>}
+          </nav>
         </div>
       </footer>
     </div>

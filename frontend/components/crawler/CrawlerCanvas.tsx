@@ -20,5 +20,5 @@ export function CrawlerCanvas({ mode = "ambient", words = [], documents = [], st
     const engine = createCrawlerEngine(canvas.current, { mode, words, documents, status, reducedMotion: media.matches });
     return () => engine.destroy();
   }, [mode, words, documents, status]);
-  return <canvas ref={canvas} aria-hidden="true" className={`h-full w-full bg-[#05090b] ${className}`} />;
+  return <canvas ref={canvas} aria-hidden="true" className={`h-full w-full ${className}`} />;
 }
