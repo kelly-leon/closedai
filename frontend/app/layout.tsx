@@ -7,13 +7,14 @@ import { AuthGuard } from "../components/AuthGuard";
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-figtree" });
 const fraunces = Fraunces({ subsets: ["latin"], variable: "--font-fraunces", style: ["normal", "italic"] });
 import "./globals.css";
+import "./marketing-tokens.css";
 
 export const metadata: Metadata = {
-  title: "ClosedAI",
-  description: "Personal AI answers grounded in your uploaded files.",
+  title: "ClosedAI — Ask anything about your own files",
+  description: "Ask questions of your documents, notes, reports, manuals and contracts with cited answers from ClosedAI.",
   openGraph: {
     title: "ClosedAI",
-    description: "Study smarter from your own notes with cited answers.",
+    description: "Ask anything about your own files and get cited answers.",
     type: "website",
   },
 };

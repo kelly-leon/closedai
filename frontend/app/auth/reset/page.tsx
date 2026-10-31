@@ -2,11 +2,13 @@
 
 import { FormEvent, useState } from "react";
 import { supabase } from "../../../lib/supabase";
+import { AuthShell } from "../../../components/auth/AuthShell";
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (password.length < 8) { setError("Choose a password of at least 8 characters."); return; }
@@ -14,11 +16,12 @@ export default function ResetPasswordPage() {
     if (authError) setError(authError.message);
     else { setError(""); setDone(true); }
   }
-  return <main className="flex min-h-screen items-center justify-center p-4"><form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-950/70 p-6 backdrop-blur-xl">
-    <h1 className="text-2xl font-semibold">Choose a new password</h1>
-    {error && <p role="alert" className="mt-3 rounded bg-red-950/70 px-3 py-2 text-sm text-red-100">{error}</p>}
-    {done && <p className="mt-3 rounded bg-emerald-950/70 px-3 py-2 text-sm text-emerald-100">Password updated. You can sign in now.</p>}
-    <input type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="New password" className="mt-5 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2" />
-    <button className="mt-4 w-full rounded-lg bg-white py-2 font-semibold text-slate-950">Update password</button>
-  </form></main>;
+  return <AuthShell><form onSubmit={submit} className="auth-form" noValidate>
+    <p className="auth-eyebrow">Account access</p>
+    <h1>Choose a new<br />password.</h1>
+    {error && <p role="alert" className="auth-message auth-error">Error: {error}</p>}
+    {done && <p role="status" className="auth-message auth-success">Password updated. You can sign in now.</p>}
+    <div className="auth-field auth-password-field"><input id="reset-password" type={showPassword ? "text" : "password"} value={password} onChange={event => setPassword(event.target.value)} placeholder=" " autoComplete="new-password" /><label htmlFor="reset-password">New password</label><button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)}>{showPassword ? "Hide" : "Show"}</button></div>
+    <button className="auth-primary">Update password<span aria-hidden="true">↗</span></button>
+  </form></AuthShell>;
 }

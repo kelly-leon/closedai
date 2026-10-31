@@ -60,8 +60,8 @@ function LandingPage({ signedIn }: { signedIn: boolean }) {
         <section className="hero mx-auto flex min-h-[760px] max-w-[1240px] flex-col justify-center px-5 py-24 md:px-8 md:py-32">
           <div className="max-w-[980px]">
             <p className="hero-kicker">Your course, finally connected</p>
-            <h1>Answers <em>from</em><br />your own notes.</h1>
-            <p className="hero-copy">Ask across lectures, readings and past papers—and get an answer you can trace.</p>
+            <h1>Ask anything <em>from</em><br />your own files.</h1>
+            <p className="hero-copy">Search notes, contracts, manuals and reports in one place—and get answers you can trace.</p>
           </div>
           <div className="hero-question" role="search">
             <span>Ask your files</span>
@@ -119,7 +119,10 @@ function LandingPage({ signedIn }: { signedIn: boolean }) {
       </main>
       <footer className="landing-footer relative z-10">
         <div className="mx-auto flex max-w-[1240px] flex-wrap items-end justify-between gap-10 px-5 py-16 md:px-8">
-          <Link href="/" className="footer-wordmark">ClosedAI</Link>
+          <div>
+            <Link href="/" className="footer-wordmark">ClosedAI</Link>
+            <p className="footer-copy">Ask anything about your own files.</p>
+          </div>
           <nav aria-label="Footer">
           <Link href="/privacy">Privacy</Link>
           <Link href="/terms">Terms</Link>
