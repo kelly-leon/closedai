@@ -1,50 +1,59 @@
 "use client";
 
-import { Children, cloneElement, FormEvent, isValidElement, KeyboardEvent, memo, ReactElement, ReactNode, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Component, ErrorInfo, FormEvent, KeyboardEvent, memo, ReactNode, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { api, Source } from "../lib/api";
-import { inlineSources, SourceList } from "./SourceList";
+import { SourceList } from "./SourceList";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import dynamic from "next/dynamic";
 import { tokenizeWords } from "../lib/messageText";
 import type { CrawlerStatus } from "../lib/crawler";
+import { MessageContent } from "./MessageContent";
+import * as Sentry from "@sentry/nextjs";
 
 const CrawlerCanvas = dynamic(() => import("./crawler/CrawlerCanvas").then(module => module.CrawlerCanvas), { ssr: false });
 
-function MarkdownInline({ children, sources }: { children: ReactNode; sources: Source[] | null }) {
-  return <>{Children.map(children, child => {
-    if (typeof child === "string") return inlineSources(child, sources);
-    if (isValidElement(child)) return cloneElement(child as ReactElement<{ children?: ReactNode }>, {}, <MarkdownInline sources={sources}>{(child.props as { children?: ReactNode }).children}</MarkdownInline>);
-    return child;
-  })}</>;
-}
-
-interface DisplayMessage { id: string; role: "user" | "assistant"; content: string; sources: Source[] | null }
+interface DisplayMessage { id: string; role: "user" | "assistant"; content: string | null; sources: Source[] | null }
 interface SelectionButton { text: string; left: number; top: number }
 
 const MessageItem = memo(function MessageItem({ message, streaming }: { message: DisplayMessage; streaming: boolean }) {
-  const parsed = message.role === "user" ? splitQuotedMessage(message.content) : null;
   return <article className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
     <div className={`app-message max-w-[85%] ${message.role === "user" ? "app-user-message" : "app-assistant-message"}`}>
-      {message.role === "assistant" ? <div data-assistant-message className="prose prose-sm prose-slate dark:prose-invert max-w-none leading-7"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{p: ({children}) => <p><MarkdownInline sources={message.sources}>{children}</MarkdownInline></p>, li: ({children}) => <li><MarkdownInline sources={message.sources}>{children}</MarkdownInline></li>, h1: ({children}) => <h1><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h1>, h2: ({children}) => <h2><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h2>, h3: ({children}) => <h3><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h3>}}>{message.content}</ReactMarkdown></div> : parsed && <div className="text-sm leading-relaxed">{parsed.quote && <blockquote className="mb-2 max-w-md border-l-2 border-slate-300/60 pl-3 text-xs text-[#a9b3c7] whitespace-pre-wrap">{parsed.quote}</blockquote>}<p className="whitespace-pre-wrap">{parsed.question}</p></div>}
+      <div data-assistant-message={message.role === "assistant" ? true : undefined}>
+        <MessageContent content={message.content} role={message.role} sources={message.sources} />
+      </div>
       {message.role === "assistant" && !streaming && <SourceList sources={message.sources} />}
     </div>
   </article>;
 });
 
-function splitQuotedMessage(content: string): { quote: string | null; question: string } {
-  if (!content.startsWith("> ")) return { quote: null, question: content };
-  const lines = content.split("\n");
-  const quoted: string[] = [];
-  let index = 0;
-  while (index < lines.length && lines[index].startsWith("> ")) {
-    quoted.push(lines[index].slice(2));
-    index += 1;
+export class MessageListErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: Error, _info: ErrorInfo) { logMessageRenderError(error); }
+  render() { return this.state.failed ? <div role="alert">This message could not be displayed</div> : this.props.children; }
+}
+
+export class MessageErrorBoundary extends Component<{ children: ReactNode; rawText: string }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: Error, _info: ErrorInfo) { logMessageRenderError(error); }
+  render() {
+    return this.state.failed
+      ? <article role="alert"><div>This message could not be displayed</div><pre className="whitespace-pre-wrap">{this.props.rawText}</pre></article>
+      : this.props.children;
   }
-  while (index < lines.length && lines[index] === "") index += 1;
-  return { quote: quoted.join("\n") || null, question: lines.slice(index).join("\n") };
+}
+
+function logMessageRenderError(error: Error) {
+  try {
+    Sentry.withScope(scope => {
+      scope.clear();
+      Sentry.captureException(error);
+    });
+  } catch {
+    // Sentry is optional; rendering the safe fallback must never depend on it.
+  }
 }
 
 export function Chat({ conversationId }: { conversationId?: string }) {
@@ -119,7 +128,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
       if (!request.signal.aborted) setMessages(items.map(item => ({
         id: item.id,
         role: item.role,
-        content: item.content,
+        content: item.content ?? "",
         sources: item.sources,
       })));
     }).catch(() => { if (!request.signal.aborted) setError("Could not load this conversation."); }).finally(() => { if (!request.signal.aborted) setLoading(false); });
@@ -284,7 +293,9 @@ export function Chat({ conversationId }: { conversationId?: string }) {
       <div className="mx-auto max-w-3xl space-y-5">
         {loading && <div className="h-24 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />}
         {!loading && messages.length === 0 && <div className="py-20 text-center"><h1 className="text-2xl font-semibold">What are we exploring?</h1><p className="mt-2 rounded-md bg-slate-950/70 px-3 py-1.5 text-slate-200 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">Ask a question grounded in your uploaded documents.</p></div>}
-        {messages.map(message => <MessageItem key={message.id} message={message} streaming={streaming} />)}
+        <MessageListErrorBoundary>
+          {messages.map(message => <MessageErrorBoundary key={message.id} rawText={message.content ?? ""}><MessageItem message={message} streaming={streaming} /></MessageErrorBoundary>)}
+        </MessageListErrorBoundary>
         {streaming && thinking && <ThinkingIndicator status={workingStatus} />}
         {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-300/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 backdrop-blur"><span>{error}</span>{lastMessage && <button type="button" onClick={() => void send(lastMessage)} disabled={streaming} className="shrink-0 rounded-full bg-white/10 px-3 py-1 font-semibold text-white hover:bg-white/15">Retry</button>}</div>}
         {limitReached && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-amber-300/40 bg-amber-950/85 px-4 py-3 text-sm text-white backdrop-blur"><span>You’ve reached your current allowance. Add tokens to keep chatting.</span><a href="/upgrade" className="shrink-0 rounded-full bg-white px-3 py-1 font-semibold text-slate-950">Upgrade</a></div>}
