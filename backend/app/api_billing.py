@@ -15,7 +15,7 @@ from app.auth.factory import get_auth_provider
 from app.config import get_settings
 from app.db.models import AuditLog, Package, PaymentRequest, RedeemCode, User, UserPlan, UsageEvent
 from app.db.session import get_db
-from app.notify import notify_payment
+from app.notify import configured_providers, notify_payment, send_notification
 from app.usage import apply_daily_reset, apply_weekly_reset, code_hash, documents_used, ensure_plan, normalize_code, trial_remaining, valid_admin_key
 
 router = APIRouter(tags=["billing"])
@@ -68,7 +68,12 @@ def admin_claims(credentials: HTTPAuthorizationCredentials | None = Depends(bear
 
 @router.get("/admin/me")
 def admin_me(claims=Depends(admin_claims)) -> dict[str, bool]:
-    return {"is_admin": True}
+    return {"is_admin": True, "notifier_configured": bool(configured_providers())}
+
+
+@router.get("/admin/notify-test")
+def notify_test(claims=Depends(admin_claims)) -> list[dict[str, object]]:
+    return send_notification("ClosedAI notification test. If you received this, alerts are working.")
 
 
 @router.post("/admin/codes")

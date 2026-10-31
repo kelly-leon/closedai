@@ -18,6 +18,7 @@ export default function AdminPage() {
   const [days, setDays] = useState("");
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
+  const [notifierConfigured, setNotifierConfigured] = useState(true);
 
   async function refresh() {
     const statuses: Tab[] = ["pending", "approved", "rejected"];
@@ -25,7 +26,7 @@ export default function AdminPage() {
     setRequests({ pending: values[0], approved: values[1], rejected: values[2] });
   }
   useEffect(() => {
-    void api.adminMe().then(async () => { setAllowed(true); await refresh(); void api.adminUsageSummary().then(setSummary).catch(() => undefined); }).catch(() => router.replace("/"));
+    void api.adminMe().then(async status => { setNotifierConfigured(status.notifier_configured); setAllowed(true); await refresh(); void api.adminUsageSummary().then(setSummary).catch(() => undefined); }).catch(() => router.replace("/"));
   }, [router]);
   useEffect(() => {
     if (!allowed) return;
@@ -55,6 +56,7 @@ export default function AdminPage() {
   return <div className="h-full overflow-y-auto p-4 text-white md:p-8">
     <div className="mx-auto max-w-6xl">
       <h1 className="text-3xl font-semibold">Admin dashboard</h1>
+      {!notifierConfigured && <p role="status" className="mt-4 text-sm text-amber-200">Email alerts are off; check Pending regularly</p>}
       <div className="mt-6 flex gap-2 border-b border-white/15">
         {(["pending", "approved", "rejected"] as Tab[]).map(item => <button key={item} onClick={() => setTab(item)} className={`px-4 py-2 capitalize ${tab === item ? "border-b-2 border-sky-300 font-semibold" : "text-slate-300"}`}>
           {item}{item === "pending" && requests.pending.length > 0 && <span className="ml-2 rounded-full bg-amber-300 px-2 text-xs text-slate-950">{requests.pending.length}</span>}

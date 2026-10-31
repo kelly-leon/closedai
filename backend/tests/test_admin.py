@@ -66,7 +66,7 @@ def test_premium_extension_math(db):
 
 
 def test_admin_me_returns_true():
-    assert admin_me({"email": "admin@example.com"}) == {"is_admin": True}
+    assert admin_me({"email": "admin@example.com"})["is_admin"] is True
 
 
 def test_full_name_sync(monkeypatch, db):
