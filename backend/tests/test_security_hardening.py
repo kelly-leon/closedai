@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 from uuid import uuid4
 
 import pytest
@@ -104,3 +105,62 @@ def test_account_deletion_removes_owned_data(monkeypatch):
         assert db.scalar(select(Unit).where(Unit.user_id == user_id)) is None
         assert db.scalar(select(UserPlan).where(UserPlan.user_id == user_id)) is None
         assert db.scalar(select(AccountDeletionAudit)) is not None
+
+
+def test_account_deletion_rejects_wrong_confirmation():
+    with pytest.raises(HTTPException) as exc:
+        delete_account(type("Payload", (), {"confirm": "no"})(), uuid4(), object())
+    assert exc.value.status_code == 422
+
+
+def test_account_deletion_auth_failure_can_retry(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    user_id = uuid4()
+    settings = type("Settings", (), {
+        "mode": "hosted",
+        "supabase_url": "https://project.supabase.co",
+        "supabase_service_key": "service-key",
+    })()
+    monkeypatch.setattr("app.api_account.get_settings", lambda: settings)
+    monkeypatch.setattr("app.api_account.get_storage_provider", lambda: type("Storage", (), {"delete": lambda self, key: None})())
+
+    calls = []
+    def delete(url, headers, timeout):
+        calls.append(url)
+        if len(calls) == 1:
+            raise httpx.ConnectError("offline")
+        return httpx.Response(200, request=httpx.Request("DELETE", url))
+    monkeypatch.setattr(httpx, "delete", delete)
+
+    with Session(engine) as db:
+        db.add(User(id=user_id))
+        db.commit()
+        with pytest.raises(HTTPException) as exc:
+            delete_account(type("Payload", (), {"confirm": "DELETE"})(), user_id, db)
+        assert exc.value.status_code == 502
+        assert delete_account(type("Payload", (), {"confirm": "DELETE"})(), user_id, db)["deleted"] is True
+    assert len(calls) == 2
+
+
+def test_account_deletion_preserves_another_users_data(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    owner_id = uuid4()
+    other_id = uuid4()
+    owner_unit = uuid4()
+    other_unit = uuid4()
+    with Session(engine) as db:
+        db.add_all([
+            User(id=owner_id),
+            User(id=other_id),
+            Unit(id=owner_unit, user_id=owner_id, name="Owner"),
+            Unit(id=other_unit, user_id=other_id, name="Other"),
+        ])
+        db.commit()
+        monkeypatch.setattr("app.api_account.get_storage_provider", lambda: type("Storage", (), {"delete": lambda self, key: None})())
+        monkeypatch.setattr("app.api_account.get_settings", lambda: type("Settings", (), {"mode": "selfhosted"})())
+        delete_account(type("Payload", (), {"confirm": "DELETE"})(), owner_id, db)
+        assert db.scalar(select(Unit).where(Unit.id == owner_unit)) is None
+        assert db.scalar(select(Unit).where(Unit.id == other_unit)) is not None
+        assert db.scalar(select(User).where(User.id == other_id)) is not None

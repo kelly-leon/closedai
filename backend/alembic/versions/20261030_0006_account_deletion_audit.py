@@ -20,6 +20,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(), nullable=False),
         sa.Column("reason", sa.String(length=32), nullable=False),
+        sa.Column("user_id", sa.Uuid(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
 

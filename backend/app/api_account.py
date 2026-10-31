@@ -1,14 +1,17 @@
 """Account export and deletion routes."""
 
 from uuid import UUID
+import logging
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api_documents import current_user
+from app.auth.factory import get_auth_provider
 from app.db.models import (
     AccountDeletionAudit,
     Chunk,
@@ -26,10 +29,19 @@ from app.storage.factory import get_storage_provider
 from app.config import get_settings
 
 router = APIRouter(prefix="/me", tags=["account"])
+bearer = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 
 class DeleteAccountPayload(BaseModel):
     confirm: str
+
+
+def authenticated_account_id(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> UUID:
+    provider = get_auth_provider()
+    claims = provider.get_claims(credentials)
+    subject = claims["sub"] if "sub" in claims else provider.get_user_id(credentials)
+    return UUID(str(subject))
 
 
 @router.get("/export")
@@ -71,7 +83,7 @@ def export_account(user_id: UUID = Depends(current_user), db: Session = Depends(
 
 
 @router.delete("")
-def delete_account(payload: DeleteAccountPayload, user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, bool]:
+def delete_account(payload: DeleteAccountPayload, user_id: UUID = Depends(authenticated_account_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     if payload.confirm != "DELETE":
         raise HTTPException(status_code=422, detail='Confirmation must be exactly "DELETE".')
     documents = db.scalars(select(Document).where(Document.user_id == user_id)).all()
@@ -86,7 +98,7 @@ def delete_account(payload: DeleteAccountPayload, user_id: UUID = Depends(curren
     db.execute(delete(PaymentRequest).where(PaymentRequest.user_id == user_id))
     db.execute(delete(Unit).where(Unit.user_id == user_id))
     db.execute(delete(UserPlan).where(UserPlan.user_id == user_id))
-    db.add(AccountDeletionAudit(reason="user_request"))
+    db.add(AccountDeletionAudit(reason="user_request", user_id=user_id))
     db.execute(delete(User).where(User.id == user_id))
     db.commit()
 
@@ -102,5 +114,6 @@ def delete_account(payload: DeleteAccountPayload, user_id: UUID = Depends(curren
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
+            logger.error("account deletion step=supabase_auth user_id=%s error=%s", user_id, type(exc).__name__)
             raise HTTPException(status_code=502, detail="Account data was removed, but Supabase account removal failed.") from exc
     return {"deleted": True}

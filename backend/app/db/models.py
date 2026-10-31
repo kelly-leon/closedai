@@ -29,6 +29,7 @@ class AccountDeletionAudit(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     deleted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     reason: Mapped[str] = mapped_column(String(32), nullable=False, default="user_request")
+    user_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
 
 
 class Document(Base):

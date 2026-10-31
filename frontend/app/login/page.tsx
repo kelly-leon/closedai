@@ -12,18 +12,30 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [resetSuccess, setResetSuccess] = useState(false);
+  const [unconfirmed, setUnconfirmed] = useState(false);
   useEffect(() => {
     setResetSuccess(new URLSearchParams(window.location.search).get("reset") === "success");
+    const emailParam = new URLSearchParams(window.location.search).get("email");
+    if (emailParam) setEmail(emailParam);
   }, []);
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
+    setUnconfirmed(false);
     if (!email.trim() || !password) { setError("Enter your email and password."); return; }
     setBusy(true);
     const { error: authError } = await supabase!.auth.signInWithPassword({ email: email.trim(), password });
     setBusy(false);
-    if (authError) setError(authError.message);
+    if (authError) {
+      if (authError.message.toLowerCase().includes("email not confirmed")) setUnconfirmed(true);
+      setError("Email or password is incorrect.");
+    }
     else window.location.assign("/app");
+  }
+  async function resendConfirmation() {
+    setError("");
+    const { error: resendError } = await supabase!.auth.resend({ type: "signup", email: email.trim() });
+    setError(resendError ? "We couldn't resend the confirmation email. Please try again." : "Confirmation email sent.");
   }
   async function google() {
     await supabase!.auth.signInWithOAuth({ provider: "google", options: { redirectTo: `${window.location.origin}/auth/reset` } });
@@ -33,6 +45,7 @@ export default function LoginPage() {
     <h1>Sign in to<br />ClosedAI.</h1>
     {resetSuccess && <p role="status" className="auth-message auth-success">Password updated successfully. Sign in with your new password.</p>}
     {error && <p role="alert" className="auth-message auth-error">Error: {error}</p>}
+    {unconfirmed && <button type="button" onClick={() => void resendConfirmation()} className="auth-text-action">Resend confirmation email</button>}
     <div className="auth-field">
       <input id="login-email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder=" " autoComplete="email" />
       <label htmlFor="login-email">Email address</label>

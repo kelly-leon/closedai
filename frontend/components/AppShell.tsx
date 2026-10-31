@@ -19,6 +19,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [userEmail, setUserEmail] = useState("");
   const [userName, setUserName] = useState("");
   const [initialError, setInitialError] = useState("");
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const authPage = ["/login", "/signup", "/forgot-password", "/auth/reset"].includes(pathname);
@@ -96,11 +100,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   async function deleteAccount() {
-    if (!window.confirm("Delete your ClosedAI account and all stored data permanently? This cannot be undone.")) return;
-    await api.deleteAccount();
-    await supabase?.auth.signOut();
-    window.localStorage.clear();
-    router.replace("/signup");
+    if (deleteConfirmation !== "DELETE") return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await api.deleteAccount();
+      try { await supabase?.auth.signOut(); } catch { /* local cleanup still completes after deletion. */ }
+      window.localStorage.clear();
+      router.replace("/?deleted=success");
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Your account could not be deleted. Please try again.");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function toggleCollapsed() {
@@ -176,12 +188,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mt-2 flex items-center justify-between gap-2">
             <span className="truncate text-white">{userName || userEmail}</span>
             <div className="flex gap-2">
-              <button onClick={deleteAccount} className="rounded px-2 py-1 text-red-300 hover:bg-red-950/40">Delete my account</button>
+              <button onClick={() => { setDeleteDialog(true); setDeleteConfirmation(""); setDeleteError(""); }} className="rounded px-2 py-1 text-red-300 hover:bg-red-950/40">Delete my account</button>
               <button onClick={async () => { await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
             </div>
           </div>
       </div>}
     </aside>
+    {deleteDialog && <div role="dialog" aria-modal="true" aria-labelledby="delete-account-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md bg-slate-950 p-6 text-white">
+        <h2 id="delete-account-title" className="text-xl font-semibold">Delete my account</h2>
+        <p className="mt-3 text-sm leading-6 text-slate-300">This permanently deletes your documents, extracted text, conversations, units, usage data, payment requests, account plan, and profile. Type DELETE to continue.</p>
+        <label htmlFor="delete-confirmation" className="mt-5 block text-sm">Confirmation</label>
+        <input id="delete-confirmation" value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} className="mt-2 w-full border-b border-white/40 bg-transparent px-0 py-2 focus:border-red-300 focus:outline-none" autoComplete="off" />
+        {deleteError && <p role="alert" className="mt-3 text-sm text-red-200">Error: {deleteError}</p>}
+        <div className="mt-6 flex justify-end gap-4 text-sm">
+          <button disabled={deleting} onClick={() => setDeleteDialog(false)} className="text-slate-300">Cancel</button>
+          <button disabled={deleting || deleteConfirmation !== "DELETE"} onClick={() => void deleteAccount()} className="font-semibold text-red-300 disabled:opacity-40">{deleting ? "Deleting..." : "Delete permanently"}</button>
+        </div>
+      </div>
+    </div>}
     {open && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setOpen(false)} />}
     <main className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</main>
   </div>;

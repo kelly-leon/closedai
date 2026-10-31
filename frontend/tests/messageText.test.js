@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { parseCitations, tokenizeWords } = require("../lib/messageText.js");
 const { crawlerOverlayVisible } = require("../lib/crawlerOverlay.js");
+const { signupDecision } = require("../lib/signupDecision.js");
 
 test("citation and word parsing handle 200,000 characters quickly", () => {
   const text = `${"a".repeat(200000)} [notes, page 42]`;
@@ -16,4 +17,16 @@ test("citation and word parsing handle 200,000 characters quickly", () => {
 
 test("crawler overlay unmounts on the first answer token", () => {
   assert.equal(crawlerOverlayVisible(true, "token"), false);
+});
+
+test("signup decision identifies new users", () => {
+  assert.equal(signupDecision({ user: { identities: [{ id: "new" }] } }, null), "new");
+});
+
+test("signup decision identifies duplicates with empty identities", () => {
+  assert.equal(signupDecision({ user: { identities: [] } }, null), "duplicate");
+});
+
+test("signup decision identifies duplicate auth errors", () => {
+  assert.equal(signupDecision({}, { message: "User already registered" }), "duplicate");
 });

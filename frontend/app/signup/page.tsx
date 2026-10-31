@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { AuthShell } from "../../components/auth/AuthShell";
+import { signupDecision } from "../../lib/signupDecision";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -26,9 +27,18 @@ export default function SignupPage() {
       password,
       options: { data: { full_name: fullName.trim() } },
     });
-    if (authError) setError(authError.message || "We couldn't create your account. Please try again.");
-    else if (data.user && !data.session) setMessage("Check your email and confirm your address before signing in.");
-    else setMessage("Check your email to confirm your account.");
+    const decision = signupDecision(data, authError);
+    if (decision === "duplicate") {
+      setError("An account with this email already exists.");
+    } else if (decision === "rate-limit") {
+      setError("Too many signup attempts. Please wait a moment and try again.");
+    } else if (decision === "error") {
+      setError("We couldn't create your account. Please try again.");
+    } else {
+      setMessage(data.user && !data.session
+        ? "Check your email and confirm your address before signing in."
+        : "Check your email to confirm your account.");
+    }
   }
   async function google() {
     await supabase!.auth.signInWithOAuth({ provider: "google", options: { redirectTo: `${window.location.origin}/app` } });
@@ -37,6 +47,7 @@ export default function SignupPage() {
     <p className="auth-eyebrow">Start here</p>
     <h1>Create your<br />account.</h1>
     {error && <p role="alert" className="auth-message auth-error">Error: {error}</p>}
+    {error === "An account with this email already exists." && <p className="auth-secondary"><Link href={`/login?email=${encodeURIComponent(email.trim())}`}>Log in</Link><Link href="/forgot-password">Forgot password?</Link></p>}
     {message && <p role="status" className="auth-message auth-success">{message}</p>}
     <div className="auth-field"><input id="signup-name" value={fullName} onChange={event => setFullName(event.target.value)} placeholder=" " required minLength={2} maxLength={60} autoComplete="name" /><label htmlFor="signup-name">Full name</label></div>
     <div className="auth-field"><input id="signup-email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder=" " autoComplete="email" /><label htmlFor="signup-email">Email address</label></div>

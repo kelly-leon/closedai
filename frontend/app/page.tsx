@@ -33,6 +33,10 @@ function LandingPage({ signedIn }: { signedIn: boolean }) {
   const action = signedIn ? "Open app" : "Get started";
   const destination = signedIn ? "/app" : "/signup";
   const [activeDemo, setActiveDemo] = useState("Ask");
+  const [deletedMessage, setDeletedMessage] = useState(false);
+  useEffect(() => {
+    setDeletedMessage(new URLSearchParams(window.location.search).get("deleted") === "success");
+  }, []);
   const demos: Record<string, { note: string; detail: string }> = {
     Ask: { note: "What explains recursive descent parsing?", detail: "An answer drawn from your lecture notes, with the source attached." },
     Cite: { note: "Recursive descent parses top-down...", detail: "Every claim links back to the exact page and passage." },
@@ -57,6 +61,7 @@ function LandingPage({ signedIn }: { signedIn: boolean }) {
         </div>
       </header>
       <main className="relative z-10">
+        {deletedMessage && <p role="status" className="mx-auto max-w-[1240px] px-5 pt-5 text-sm text-[#dfffb9] md:px-8">Your account was deleted.</p>}
         <section className="hero mx-auto flex min-h-[760px] max-w-[1240px] flex-col justify-center px-5 py-24 md:px-8 md:py-32">
           <div className="max-w-[980px]">
             <p className="hero-kicker">Your course, finally connected</p>
