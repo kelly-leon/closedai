@@ -53,17 +53,17 @@ export default function AdminPage() {
   }
 
   if (!allowed) return <div className="flex h-full items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
-  return <div className="h-full overflow-y-auto p-4 text-white md:p-8">
-    <div className="mx-auto max-w-6xl">
+  return <div className="app-page h-full overflow-y-auto text-white">
+    <div className="app-page-inner mx-auto max-w-6xl">
       <h1 className="text-3xl font-semibold">Admin dashboard</h1>
       {!notifierConfigured && <p role="status" className="mt-4 text-sm text-amber-200">Email alerts are off; check Pending regularly</p>}
-      <div className="mt-6 flex gap-2 border-b border-white/15">
+      <div className="app-tabs mt-6 flex gap-6">
         {(["pending", "approved", "rejected"] as Tab[]).map(item => <button key={item} onClick={() => setTab(item)} className={`px-4 py-2 capitalize ${tab === item ? "border-b-2 border-sky-300 font-semibold" : "text-slate-300"}`}>
           {item}{item === "pending" && requests.pending.length > 0 && <span className="ml-2 rounded-full bg-amber-300 px-2 text-xs text-slate-950">{requests.pending.length}</span>}
         </button>)}
       </div>
       <div className="mt-4 space-y-3">
-        {requests[tab].map(request => <div key={request.id} className="rounded-xl border border-white/15 bg-slate-950/70 p-4">
+        {requests[tab].map(request => <div key={request.id} className="app-row p-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div><p className="font-semibold">{request.full_name || request.email}</p><p className="text-sm text-slate-300">{request.email}</p><p className="mt-2">{request.package} · KSh {request.amount_ksh}</p>
               <p className="mt-1 text-sm text-slate-300">{new Date(request.created_at).toLocaleString()}</p></div>
@@ -73,13 +73,13 @@ export default function AdminPage() {
         </div>)}
         {requests[tab].length === 0 && <p className="text-slate-300">No {tab} requests.</p>}
       </div>
-      <section className="mt-10 rounded-xl border border-white/15 bg-slate-950/70 p-5">
+      <section className="app-admin-section mt-10">
         <h2 className="text-xl font-semibold">Manual grant</h2>
         <div className="mt-4 grid gap-3 md:grid-cols-4"><input value={email} onChange={event => setEmail(event.target.value)} placeholder="User email" className="rounded bg-slate-950 px-3 py-2" /><input value={tokens} onChange={event => setTokens(event.target.value)} type="number" min="0" placeholder="Tokens" className="rounded bg-slate-950 px-3 py-2" /><input value={days} onChange={event => setDays(event.target.value)} type="number" min="0" placeholder="Premium days" className="rounded bg-slate-950 px-3 py-2" /><input value={note} onChange={event => setNote(event.target.value)} placeholder="Note" className="rounded bg-slate-950 px-3 py-2 md:col-span-1" /></div>
         <button disabled={busy === "grant"} onClick={() => void grant()} className="mt-3 rounded bg-white px-4 py-2 font-semibold text-slate-950 disabled:opacity-50">Grant</button>
         {message && <p className="mt-3 text-sm text-slate-200">{message}</p>}
       </section>
-      {summary && <section className="mt-6 grid gap-3 md:grid-cols-2"><div className="rounded-xl border border-white/15 bg-slate-950/70 p-5"><h2 className="font-semibold">Last 7 days</h2><p className="mt-2">Answers: {summary.last_7_days.answers}</p><p>Average input: {summary.last_7_days.average_input_tokens}</p><p>Average output: {summary.last_7_days.average_output_tokens}</p></div><div className="rounded-xl border border-white/15 bg-slate-950/70 p-5"><h2 className="font-semibold">Last 30 days</h2><p className="mt-2">Answers: {summary.last_30_days.answers}</p><p>Average input: {summary.last_30_days.average_input_tokens}</p><p>Average output: {summary.last_30_days.average_output_tokens}</p></div></section>}
+      {summary && <section className="mt-6 grid gap-12 md:grid-cols-2"><div><h2 className="font-semibold">Last 7 days</h2><p className="mt-2">Answers: {summary.last_7_days.answers}</p><p>Average input: {summary.last_7_days.average_input_tokens}</p><p>Average output: {summary.last_7_days.average_output_tokens}</p></div><div><h2 className="font-semibold">Last 30 days</h2><p className="mt-2">Answers: {summary.last_30_days.answers}</p><p>Average input: {summary.last_30_days.average_input_tokens}</p><p>Average output: {summary.last_30_days.average_output_tokens}</p></div></section>}
     </div>
   </div>;
 }

@@ -2,6 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Signed-in application surface */
+.app-shell { background: var(--closedai-ink, #100e12); font-family: var(--font-figtree), sans-serif; }
+.app-shell h1, .app-shell h2, .app-shell h3, .app-chat .app-assistant-message h1, .app-chat .app-assistant-message h2, .app-chat .app-assistant-message h3 { font-family: var(--font-fraunces), Georgia, serif; }
+.app-shell button, .app-shell a, .app-shell input, .app-shell textarea, .app-shell select { outline-offset: 3px; }
+.app-shell :focus-visible { outline: 2px solid var(--closedai-lime); }
+.app-sidebar { background: #0c0a0e; }
+.app-brand-row { min-height: 52px; }
+.app-wordmark { font-size: 1.35rem; font-weight: 800; letter-spacing: -.04em; text-decoration: none; }
+.app-home-link { display: flex; align-items: center; gap: 10px; height: 40px; margin-top: 18px; padding: 0 12px; color: var(--closedai-cream); text-decoration: none; }
+.app-home-link:hover { color: var(--closedai-lime); }
+.app-home-link.icon-only { justify-content: center; width: 48px; padding: 0; }
+.app-new-chat { background: var(--closedai-panel); border: 0; }
+.app-new-chat:hover { background: rgba(185,255,102,.12); }
+.app-conversation { position: relative; border-radius: 0; }
+.app-conversation.active { background: rgba(185,255,102,.1); }
+.app-conversation.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--closedai-lime); }
+.app-account { margin-top: auto; }
+.app-mobile-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 35; height: 58px; display: flex; align-items: center; gap: 18px; padding: 0 16px; background: rgba(16,14,18,.94); }
+.app-mobile-bar button { width: 36px; height: 36px; border: 0; background: transparent; color: var(--closedai-cream); font-size: 1.2rem; }
+.app-mobile-home { display: flex; gap: 7px; color: var(--closedai-cream); font-size: .85rem; text-decoration: none; }
+.app-chat { background: var(--closedai-ink); padding-top: 58px; }
+@media (min-width: 768px) { .app-chat { padding-top: 0; } }
+.app-chat-scroll { background: radial-gradient(circle at 82% 12%, rgba(185,255,102,.035), transparent 28%); }
+.app-user-message { margin-bottom: 2px; padding: 14px 16px; border-radius: 18px 18px 4px 18px; background: #242129; color: var(--closedai-cream); }
+.app-assistant-message { padding-top: 2px; color: var(--closedai-cream); }
+.app-assistant-message .prose { color: inherit; }
+.app-composer { max-width: 768px; margin: 0 auto; padding-bottom: 1px; border-bottom: 1px solid rgba(245,240,247,.36); }
+.app-composer:focus-within { border-bottom-color: var(--closedai-lime); box-shadow: 0 1px 0 var(--closedai-lime); }
+.app-composer textarea { color: var(--closedai-cream); }
+.app-composer textarea::placeholder { color: var(--closedai-muted); }
+.app-send { border: 0; background: var(--closedai-lime); color: var(--closedai-ink); }
+.app-source-toggle, .app-source-link { border: 0; padding: 0; background: transparent; color: var(--closedai-lime); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.app-page { min-height: 100%; padding: 86px 20px 48px; background: var(--closedai-ink); color: var(--closedai-cream); }
+@media (min-width: 768px) { .app-page { padding: 48px 48px 64px; } }
+.app-page-inner { max-width: 1120px; margin: 0 auto; }
+.app-page h1, .app-page h2 { font-family: var(--font-fraunces), Georgia, serif; letter-spacing: -.035em; }
+.app-drop { margin-top: 28px; padding: 48px 24px; text-align: center; background: var(--closedai-panel); outline: 1px dashed rgba(245,240,247,.25); outline-offset: -12px; }
+.app-row { padding: 18px 0; }
+.app-row + .app-row { box-shadow: inset 0 1px rgba(245,240,247,.07); }
+.status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--closedai-muted); }
+.status-dot.ready, .status-dot.approved { background: var(--closedai-lime); }
+.status-dot.pending, .status-dot.processing { background: #ffcf70; }
+.status-dot.failed, .status-dot.rejected { background: var(--closedai-coral); }
+.app-primary { border: 0; background: var(--closedai-lime); color: var(--closedai-ink); font-weight: 750; }
+.app-text-button { border: 0; background: transparent; color: var(--closedai-cream); text-decoration: underline; text-underline-offset: 3px; }
+.app-drop-active { background: rgba(185,255,102,.09); }
+.app-package { min-height: 150px; border: 0; background: var(--closedai-panel); color: var(--closedai-cream); }
+.app-package.selected { box-shadow: inset 0 0 0 2px var(--closedai-lime); background: rgba(185,255,102,.08); }
+.app-payment { padding: 28px 0; }
+.app-payment input { border: 0; border-bottom: 1px solid rgba(245,240,247,.35); border-radius: 0; background: transparent; }
+.app-payment input:focus { border-bottom-color: var(--closedai-lime); }
+.app-tabs button { border: 0; background: transparent; box-shadow: inset 0 -1px rgba(245,240,247,.12); color: var(--closedai-muted); }
+.app-tabs button.font-semibold { box-shadow: inset 0 -2px var(--closedai-lime); color: var(--closedai-cream); }
+.app-admin-section { padding-top: 28px; }
+.app-admin-section input { border: 0; border-bottom: 1px solid rgba(245,240,247,.35); border-radius: 0; background: transparent; }
+
 html, body { margin: 0; height: 100%; }
 body { background: #05070d; color: #e8ecf4; }
 .space-gradient { background: radial-gradient(circle at 72% 18%, rgba(41, 86, 170, .08), transparent 27%), linear-gradient(180deg, #05070d 0%, #070b16 58%, #0a0f1c 100%); }

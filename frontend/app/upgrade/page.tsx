@@ -46,8 +46,8 @@ export default function UpgradePage() {
 
   const bestValue = packages.filter(item => item.tokens).sort((a, b) => ((b.tokens ?? 0) / b.price_ksh) - ((a.tokens ?? 0) / a.price_ksh))[0]?.id;
 
-  return <div className="h-full overflow-y-auto p-4 text-white md:p-8">
-    <div className="mx-auto max-w-5xl">
+  return <div className="app-page h-full overflow-y-auto text-white">
+    <div className="app-page-inner mx-auto max-w-5xl">
       <h1 className="text-3xl font-semibold">Upgrade ClosedAI</h1>
       <p className="mt-2 text-slate-300">Choose tokens or premium access. Your award is reviewed manually.</p>
       <section className="mt-8">
@@ -55,7 +55,7 @@ export default function UpgradePage() {
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {packages.map(pkg => {
             const premium = Boolean(pkg.premium_days);
-            return <button key={pkg.id} onClick={() => setSelected(pkg.id)} className={`relative rounded-xl border p-4 text-left ${selected === pkg.id ? "border-sky-300 bg-sky-950/50" : "border-white/15 bg-slate-950/70"}`}>
+            return <button key={pkg.id} onClick={() => setSelected(pkg.id)} className={`app-package relative p-4 text-left ${selected === pkg.id ? "selected" : ""}`}>
               {bestValue === pkg.id && <span className="absolute right-3 top-3 rounded-full bg-amber-300 px-2 py-1 text-xs font-bold text-slate-950">Best value</span>}
               <p className="text-2xl font-semibold">KSh {pkg.price_ksh}</p>
               <p className="mt-2">{premium ? "3 months premium" : `${pkg.tokens?.toLocaleString()} tokens`}</p>
@@ -64,7 +64,7 @@ export default function UpgradePage() {
           })}
         </div>
       </section>
-      <section className="mt-8 rounded-xl border border-white/15 bg-slate-950/70 p-5">
+      <section className="app-payment mt-8">
         <h2 className="text-lg font-semibold">2. Pay by M-Pesa</h2>
         <p className="mt-2 text-slate-300">Send the exact package amount to this till:</p>
         <div className="mt-3 flex items-center gap-3">
@@ -82,10 +82,10 @@ export default function UpgradePage() {
       <section className="mt-8">
         <h2 className="text-lg font-semibold">Your requests</h2>
         <div className="mt-3 space-y-2">
-          {requests.map(request => <div key={request.id} className="rounded-lg border border-white/15 bg-slate-950/70 p-4">
+          {requests.map(request => <div key={request.id} className="app-row p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div><p className="font-semibold">{request.package} · KSh {request.amount_ksh}</p><p className="text-sm text-slate-300">{request.mpesa_code} · {new Date(request.created_at).toLocaleString()}</p></div>
-              <span className={`rounded-full px-3 py-1 text-xs font-bold capitalize ${request.status === "approved" ? "bg-emerald-300 text-slate-950" : request.status === "rejected" ? "bg-red-300 text-slate-950" : "bg-amber-300 text-slate-950"}`}>{request.status}</span>
+              <span className={`text-xs font-bold capitalize ${request.status}`}><i className={`status-dot ${request.status}`} />{request.status}</span>
             </div>
             {request.status === "rejected" && request.reject_reason && <p className="mt-2 text-sm text-red-200">Reason: {request.reject_reason}</p>}
           </div>)}

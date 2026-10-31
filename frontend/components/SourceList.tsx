@@ -20,7 +20,7 @@ export function SourceList({ sources }: { sources: Source[] | null }) {
   }, []);
   if (!sources?.length) return null;
   return <div className="mt-4 text-sm">
-    <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-[#e8ecf4] hover:bg-white/15">
+    <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="app-source-toggle">
       Sources ({sources.length})
     </button>
     {open && <div className="mt-2 space-y-2">
@@ -45,7 +45,7 @@ export function inlineSources(text: string, sources: Source[] | null): ReactNode
       ? sources.findIndex(source => source.filename === filename && source.page === page)
       : sources.findIndex(source => source.page === page);
     const key = `${citation.start}-${filename ?? "page"}-${page}`;
-    parts.push(<button key={key} type="button" onClick={() => window.dispatchEvent(new CustomEvent("closedai:open-source", { detail: Math.max(sourceIndex, 0) }))} className="mx-0.5 inline-flex translate-y-[-1px] rounded-full bg-blue-400/15 px-2 py-0.5 text-xs font-medium text-blue-200 hover:bg-blue-400/25">Source {Math.max(sourceIndex, 0) + 1}</button>);
+    parts.push(<button key={key} type="button" onClick={() => window.dispatchEvent(new CustomEvent("closedai:open-source", { detail: Math.max(sourceIndex, 0) }))} className="app-source-link">Source {Math.max(sourceIndex, 0) + 1}</button>);
     lastIndex = citation.end;
   }
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));

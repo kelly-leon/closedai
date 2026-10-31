@@ -27,7 +27,7 @@ interface SelectionButton { text: string; left: number; top: number }
 const MessageItem = memo(function MessageItem({ message, streaming }: { message: DisplayMessage; streaming: boolean }) {
   const parsed = message.role === "user" ? splitQuotedMessage(message.content) : null;
   return <article className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-    <div className={`max-w-[85%] px-2 py-2 ${message.role === "user" ? "rounded-2xl bg-white/15 text-white backdrop-blur-md" : "w-full max-w-3xl text-slate-100"}`}>
+    <div className={`app-message max-w-[85%] ${message.role === "user" ? "app-user-message" : "app-assistant-message"}`}>
       {message.role === "assistant" ? <div data-assistant-message className="prose prose-sm prose-slate dark:prose-invert max-w-none leading-7"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{p: ({children}) => <p><MarkdownInline sources={message.sources}>{children}</MarkdownInline></p>, li: ({children}) => <li><MarkdownInline sources={message.sources}>{children}</MarkdownInline></li>, h1: ({children}) => <h1><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h1>, h2: ({children}) => <h2><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h2>, h3: ({children}) => <h3><MarkdownInline sources={message.sources}>{children}</MarkdownInline></h3>}}>{message.content}</ReactMarkdown></div> : parsed && <div className="text-sm leading-relaxed">{parsed.quote && <blockquote className="mb-2 max-w-md border-l-2 border-slate-300/60 pl-3 text-xs text-[#a9b3c7] whitespace-pre-wrap">{parsed.quote}</blockquote>}<p className="whitespace-pre-wrap">{parsed.question}</p></div>}
       {message.role === "assistant" && !streaming && <SourceList sources={message.sources} />}
     </div>
@@ -250,8 +250,8 @@ export function Chat({ conversationId }: { conversationId?: string }) {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
   }
 
-  return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-    <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
+  return <div className="app-chat flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="app-chat-scroll relative min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
       {crawlerVisible && <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden bg-slate-950/45" aria-live="polite">
         <CrawlerCanvas mode="search" words={searchWords} documents={crawlerDocuments} status={crawlerStatus} />
         <div className="absolute left-3 right-3 top-3 flex items-center gap-3 border border-white/10 bg-slate-950/80 px-3 py-2 font-mono text-[11px] text-slate-300">
@@ -299,9 +299,9 @@ export function Chat({ conversationId }: { conversationId?: string }) {
         <p className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap">{quote}</p>
         <button type="button" onClick={() => setQuote(null)} className="text-base leading-none text-[#e8ecf4]" aria-label="Remove quoted text">×</button>
       </div>}
-      <div className="flex items-end gap-2 rounded-[28px] border border-white/10 bg-slate-950/80 p-2 shadow-lg backdrop-blur-xl">
-        <textarea ref={inputRef} aria-label="Message" rows={1} value={input} onChange={event => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={streaming} placeholder="Ask your documents…" className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2 text-[#e8ecf4] outline-none placeholder:text-[#a9b3c7] disabled:opacity-60" />
-        {streaming ? <button type="button" onClick={() => { setCrawlerVisible(false); controller.current?.abort(); }} aria-label="Stop response" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg text-white">■</button> : <button type="submit" disabled={!input.trim() && !quote} aria-label="Send message" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-xl text-slate-950 disabled:opacity-40">↑</button>}
+      <div className="app-composer flex items-end gap-2">
+        <textarea ref={inputRef} aria-label="Message" rows={1} value={input} onChange={event => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={streaming} placeholder="Ask your documents…" className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2 outline-none disabled:opacity-60" />
+        {streaming ? <button type="button" onClick={() => { setCrawlerVisible(false); controller.current?.abort(); }} aria-label="Stop response" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-lg">■</button> : <button type="submit" disabled={!input.trim() && !quote} aria-label="Send message" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xl disabled:opacity-40">↑</button>}
       </div>
       </div>
     </form>
