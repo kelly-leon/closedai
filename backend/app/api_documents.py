@@ -4,6 +4,7 @@ import mimetypes
 import re
 from pathlib import Path
 from uuid import UUID, uuid4
+import hashlib
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -147,7 +148,7 @@ async def upload_document(background_tasks: BackgroundTasks, unit_id: UUID, file
     document_id = uuid4()
     storage_path = f"{user_id}/{document_id}/{file.filename}"
     get_storage_provider().save(storage_path, content)
-    document = Document(id=document_id, user_id=user_id, unit_id=unit_id, filename=file.filename or "upload", mime_type=file.content_type or "application/octet-stream", size_bytes=len(content), storage_path=storage_path, status="pending")
+    document = Document(id=document_id, user_id=user_id, unit_id=unit_id, filename=file.filename or "upload", mime_type=file.content_type or "application/octet-stream", size_bytes=len(content), storage_path=storage_path, source_hash=hashlib.sha256(content).hexdigest(), status="pending")
     db.add(document)
     db.commit()
     background_tasks.add_task(ingest_document, document_id, user_id)
@@ -193,7 +194,8 @@ async def register_document(payload: DocumentRegistration, background_tasks: Bac
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     check_limit(db, user_id, "documents")
     document_id = uuid4()
-    document = Document(id=document_id, user_id=user_id, unit_id=payload.unit_id, filename=_sanitize_filename(payload.filename), mime_type=real_type, size_bytes=real_size, storage_path=payload.storage_path, status="pending")
+    source_hash = hashlib.sha256(read(payload.storage_path)).hexdigest() if read is not None else None
+    document = Document(id=document_id, user_id=user_id, unit_id=payload.unit_id, filename=_sanitize_filename(payload.filename), mime_type=real_type, size_bytes=real_size, storage_path=payload.storage_path, source_hash=source_hash, status="pending")
     db.add(document)
     db.commit()
     background_tasks.add_task(ingest_document, document_id, user_id)
@@ -206,7 +208,7 @@ def list_documents(unit_id: UUID, user_id: UUID = Depends(current_user), db: Ses
     if db.scalar(select(Unit).where(Unit.id == unit_id, Unit.user_id == user_id)) is None:
         raise HTTPException(status_code=404, detail="Unit not found")
     documents = db.scalars(select(Document).where(Document.user_id == user_id, Document.unit_id == unit_id).order_by(Document.created_at.desc())).all()
-    return [{"id": str(document.id), "filename": document.filename, "status": document.status, "error_message": document.error_message} for document in documents]
+    return [{"id": str(document.id), "filename": document.filename, "status": document.status, "error_message": document.error_message, "chunks_done": document.chunks_done, "chunks_total": document.chunks_total} for document in documents]
 
 
 @router.get("/{document_id}")
@@ -215,7 +217,7 @@ def document_details(document_id: UUID, user_id: UUID = Depends(current_user), d
     document = db.scalar(select(Document).where(Document.id == document_id, Document.user_id == user_id))
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    return {"id": str(document.id), "filename": document.filename, "mime_type": document.mime_type, "size_bytes": document.size_bytes, "status": document.status, "error_message": document.error_message, "created_at": document.created_at.isoformat()}
+    return {"id": str(document.id), "filename": document.filename, "mime_type": document.mime_type, "size_bytes": document.size_bytes, "status": document.status, "error_message": document.error_message, "chunks_done": document.chunks_done, "chunks_total": document.chunks_total, "created_at": document.created_at.isoformat()}
 
 
 @router.post("/{document_id}/retry", status_code=202)

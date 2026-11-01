@@ -68,7 +68,12 @@ def apply_daily_reset(db: Session, plan: UserPlan, now: datetime | None = None) 
 
 
 def documents_used(db: Session, user_id: UUID) -> int:
-    return int(db.scalar(select(func.count()).select_from(Document).where(Document.user_id == user_id)) or 0)
+    return int(db.scalar(
+        select(func.count()).select_from(Document).where(
+            Document.user_id == user_id,
+            Document.status.in_(["pending", "processing", "ready"]),
+        )
+    ) or 0)
 
 
 def limit_payload(limit: str, message: str) -> dict[str, str]:

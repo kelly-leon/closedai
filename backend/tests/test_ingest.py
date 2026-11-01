@@ -13,6 +13,8 @@ from app.api_documents import retry_document
 from app.db.models import Base, Document, Unit, User
 from app.ingest.chunk import chunk_text
 from app.ingest.parse import SCANNED_PDF_MESSAGE, parse_document
+from app.db.models import Chunk
+from app.ingest.pipeline import ingest_document
 
 
 def test_chunk_text_overlaps() -> None:
@@ -72,6 +74,50 @@ def test_startup_recovery_marks_stale_documents(monkeypatch) -> None:
         assert recovered is not None and recovered.status == "failed"
         assert recovered.error_message == "Interrupted. Please re-upload."
         assert active is not None and active.status == "processing"
+
+
+def test_ingestion_resume_keeps_committed_chunks(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[User.__table__, Unit.__table__, Document.__table__, Chunk.__table__])
+    user_id = uuid4()
+    unit_id = uuid4()
+    document_id = uuid4()
+    with Session(engine) as db:
+        db.add_all([User(id=user_id), Unit(id=unit_id, user_id=user_id, name="General")])
+        db.add(Document(id=document_id, user_id=user_id, unit_id=unit_id, filename="resume.txt", mime_type="text/plain", size_bytes=1, storage_path="resume.txt", status="pending", source_hash="old"))
+        db.commit()
+
+    class Storage:
+        def read(self, _path):
+            return b"content"
+
+    calls = []
+    class Embeddings:
+        def embed_documents(self, texts):
+            calls.append(len(texts))
+            if len(calls) == 2:
+                raise RuntimeError("interrupted")
+            return [[0.1] * 384 for _ in texts]
+
+    monkeypatch.setattr(main_module, "get_engine", lambda: engine)
+    monkeypatch.setattr("app.ingest.pipeline.get_engine", lambda: engine)
+    monkeypatch.setattr("app.ingest.pipeline.get_storage_provider", lambda: Storage())
+    monkeypatch.setattr("app.ingest.pipeline.get_embedding_provider", lambda: Embeddings())
+    monkeypatch.setattr("app.ingest.pipeline.parse_document", lambda *_args: [(None, "content")])
+    monkeypatch.setattr("app.ingest.pipeline.chunk_pages", lambda _pages: [(None, "chunk-%s" % index) for index in range(250)])
+    ingest_document(document_id, user_id)
+    with Session(engine) as db:
+        assert db.scalar(select(Chunk.document_id).where(Chunk.document_id == document_id)) is not None
+        assert db.scalar(select(Document).where(Document.id == document_id)).status == "failed"
+
+    with Session(engine) as db:
+        db.get(Document, document_id).status = "pending"
+        db.commit()
+    ingest_document(document_id, user_id)
+    with Session(engine) as db:
+        assert db.scalar(select(Document).where(Document.id == document_id)).status == "ready"
+        assert len(db.scalars(select(Chunk).where(Chunk.document_id == document_id)).all()) == 250
+    assert calls == [200, 50, 50]
 
 
 def test_retry_document_is_owned_and_failed_only() -> None:

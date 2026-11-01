@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     max_tool_rounds: int = 6
     chat_history_limit: int = 20
     embedding_dim: int | None = None
-    embedding_batch_size: int = 32
+    embedding_batch_size: int = 64
+    embedding_max_tokens_per_request: int = 120_000
+    voyage_max_wait_seconds: float = 300
+    voyage_min_interval_seconds: float = 0.5
     ingest_timeout_seconds: int = 600
     upload_dir: str = "./uploads"
     supabase_bucket: str = "documents"

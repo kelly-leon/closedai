@@ -58,7 +58,7 @@ export interface ConversationSummary { id: string; title: string; created_at: st
 export interface BootstrapData { units: Unit[]; usage: Usage; conversations: ConversationSummary[]; admin: boolean }
 export interface Source { filename: string; page: number | null; snippet: string }
 export interface Message { id: string; role: "user" | "assistant"; content: string | null; sources: Source[] | null; created_at: string }
-export interface DocumentItem { id: string; filename: string; status: "pending" | "processing" | "ready" | "failed"; error_message?: string | null }
+export interface DocumentItem { id: string; filename: string; status: "pending" | "processing" | "ready" | "failed"; error_message?: string | null; chunks_done?: number; chunks_total?: number }
 export interface Unit { id: string; name: string }
 export interface Usage {
   plan: string;

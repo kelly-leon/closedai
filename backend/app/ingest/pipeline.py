@@ -1,17 +1,18 @@
 """Database-backed document ingestion pipeline."""
 
+import hashlib
 import logging
 import threading
 import time
 from uuid import UUID
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from app.db.models import Chunk, Document
 from app.db.session import get_engine
-from sqlalchemy.orm import Session
-
 from app.embeddings.factory import get_embedding_provider
+from app.embeddings.voyage import VoyageConfigurationError, VoyageRateLimitError
 from app.ingest.chunk import chunk_pages
 from app.ingest.parse import parse_document
 from app.storage.factory import get_storage_provider
@@ -29,13 +30,12 @@ def _mark_timed_out(document_id: UUID, user_id: UUID, timeout_seconds: int) -> N
         document = db.get(Document, document_id)
         if document is not None and document.user_id == user_id and document.status == "processing":
             document.status = "failed"
-            document.error_message = f"Ingestion timed out after {timeout_seconds} seconds."
+            document.error_message = "Ingestion timed out. Press Retry in a few minutes."
             db.commit()
-            logger.error("Ingestion timed out for document %s", document_id)
 
 
 def ingest_document(document_id: UUID, user_id: UUID) -> None:
-    """Parse, chunk, embed, and store one document idempotently."""
+    """Parse, embed, and commit chunks incrementally so ingestion can resume."""
     from app.config import get_settings
 
     settings = get_settings()
@@ -49,37 +49,62 @@ def ingest_document(document_id: UUID, user_id: UUID) -> None:
             document.status = "processing"
             document.error_message = None
             db.commit()
-            logger.info("Ingesting document %s", document_id)
-            watchdog = threading.Thread(
-                target=_mark_timed_out,
-                args=(document_id, user_id, settings.ingest_timeout_seconds),
-                daemon=True,
-                name=f"ingest-timeout-{document_id}",
-            )
-            watchdog.start()
+            threading.Thread(target=_mark_timed_out, args=(document_id, user_id, settings.ingest_timeout_seconds), daemon=True).start()
+
             content = storage.read(document.storage_path)
-            started_at = time.perf_counter()
+            source_hash = hashlib.sha256(content).hexdigest()
+            hash_changed = bool(document.source_hash and document.source_hash != source_hash)
+            if hash_changed:
+                db.execute(delete(Chunk).where(Chunk.document_id == document_id, Chunk.user_id == user_id))
+            document.source_hash = source_hash
+
             pages = parse_document(document.filename, content)
-            _timed_stage(document_id, "parse", started_at)
-            started_at = time.perf_counter()
             chunks = chunk_pages(pages)
             if not chunks:
                 raise ValueError("Document produced no text chunks")
-            _timed_stage(document_id, "chunk", started_at)
-            db.execute(delete(Chunk).where(Chunk.document_id == document_id, Chunk.user_id == user_id))
-            texts = [text for _, text in chunks]
-            vectors: list[list[float]] = []
-            started_at = time.perf_counter()
-            for start in range(0, len(texts), settings.embedding_batch_size):
-                batch = texts[start:start + settings.embedding_batch_size]
-                vectors.extend(embeddings.embed_documents(batch))
-                logger.info("Embedded chunks %s-%s for document %s", start, start + len(batch), document_id)
-            _timed_stage(document_id, "embed", started_at)
-            started_at = time.perf_counter()
-            db.add_all([Chunk(document_id=document_id, user_id=user_id, unit_id=document.unit_id, chunk_index=index, content=text, page_number=page, embedding=vector) for index, (page, text), vector in zip(range(len(chunks)), chunks, vectors)])
-            document.status = "ready"
+            document.chunks_total = len(chunks)
             db.commit()
-            _timed_stage(document_id, "store", started_at)
+
+            existing = set(db.scalars(select(Chunk.chunk_index).where(Chunk.document_id == document_id, Chunk.user_id == user_id)).all())
+            missing = [index for index in range(len(chunks)) if index not in existing]
+            document.chunks_done = len(chunks) - len(missing)
+            db.commit()
+
+            for group_start in range(0, len(missing), 200):
+                group = missing[group_start:group_start + 200]
+                texts = [chunks[index][1] for index in group]
+                document.error_message = f"Embedding {document.chunks_done} of {len(chunks)} sections, waiting for the service to catch up"
+                db.commit()
+                vectors = embeddings.embed_documents(texts)
+                db.add_all([
+                    Chunk(document_id=document_id, user_id=user_id, unit_id=document.unit_id,
+                          chunk_index=index, content=chunks[index][1], page_number=chunks[index][0], embedding=vector)
+                    for index, vector in zip(group, vectors)
+                ])
+                document.chunks_done += len(group)
+                document.error_message = f"Embedding {document.chunks_done} of {len(chunks)} sections"
+                db.commit()
+
+            document.status = "ready"
+            document.error_message = None
+            document.chunks_done = len(chunks)
+            db.commit()
+        except VoyageRateLimitError as exc:
+            db.rollback()
+            document = db.get(Document, document_id)
+            if document is not None and document.user_id == user_id:
+                document.status = "failed"
+                document.error_message = "The embedding service is busy. Press Retry in a few minutes."
+                db.commit()
+            logger.exception("Voyage rate limit exhausted for document %s", document_id)
+        except VoyageConfigurationError as exc:
+            db.rollback()
+            document = db.get(Document, document_id)
+            if document is not None and document.user_id == user_id:
+                document.status = "failed"
+                document.error_message = str(exc)
+                db.commit()
+            logger.exception("Voyage configuration rejected for document %s", document_id)
         except Exception as exc:
             db.rollback()
             document = db.get(Document, document_id)

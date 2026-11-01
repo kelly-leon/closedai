@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.models import Base, Document, RedeemCode, Unit, User, UserPlan
-from app.usage import check_limit, code_hash
+from app.usage import check_limit, code_hash, documents_used
 
 
 @pytest.fixture
@@ -38,6 +38,19 @@ def test_quota_blocks_at_limit(monkeypatch, db):
     with pytest.raises(Exception) as exc:
         check_limit(db, user, "messages")
     assert getattr(exc.value, "status_code", None) == 402
+
+
+def test_failed_documents_do_not_count_toward_quota(db):
+    user = uuid4()
+    unit = uuid4()
+    db.add_all([User(id=user), Unit(id=unit, user_id=user, name="General")])
+    db.add_all([
+        Document(id=uuid4(), user_id=user, unit_id=unit, filename="failed.txt", mime_type="text/plain", size_bytes=1, storage_path="failed", status="failed"),
+        Document(id=uuid4(), user_id=user, unit_id=unit, filename="ready.txt", mime_type="text/plain", size_bytes=1, storage_path="ready", status="ready"),
+        Document(id=uuid4(), user_id=user, unit_id=unit, filename="processing.txt", mime_type="text/plain", size_bytes=1, storage_path="processing", status="processing"),
+    ])
+    db.commit()
+    assert documents_used(db, user) == 2
 
 
 def test_expired_plan_is_blocked(monkeypatch, db):
