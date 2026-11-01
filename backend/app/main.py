@@ -24,6 +24,7 @@ from app.api_account import router as account_router
 from app.db.models import Unit
 from app.rate_limit import rate_limit
 from app.notify import notifier_startup_name
+from app.mailer import mailer_startup_name
 
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 request_id_context: ContextVar[str] = ContextVar("request_id", default="")
@@ -62,6 +63,7 @@ root_logger.addHandler(handler)
 
 settings = get_settings()
 logging.getLogger("closedai.notifier").info(notifier_startup_name())
+logging.getLogger("closedai.mailer").info(mailer_startup_name())
 if settings.sentry_dsn:
     try:
         import sentry_sdk

@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { AuthShell } from "../../components/auth/AuthShell";
 import { signupDecision } from "../../lib/signupDecision";
+import { wakeBackend } from "../../lib/wakeBackend";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -14,6 +15,7 @@ export default function SignupPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  useEffect(() => { wakeBackend(); }, []);
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");

@@ -10,6 +10,35 @@ export class ApiError extends Error {
   }
 }
 
+export const SERVER_WAKE_MESSAGE = "Waking the server up, this can take up to a minute on the first visit";
+const RETRY_DELAYS = [1500, 3000, 6000, 10000];
+const WAKEABLE_STATUSES = new Set([502, 503, 504]);
+let wakingRequests = 0;
+
+function setWaking(active: boolean) {
+  wakingRequests = Math.max(0, wakingRequests + (active ? 1 : -1));
+  window.dispatchEvent(new CustomEvent("closedai:server-waking", { detail: wakingRequests > 0 }));
+}
+
+function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+    const abort = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
+    const timer = window.setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function methodOf(init: RequestInit): string {
+  return (init.method ?? "GET").toUpperCase();
+}
+
+function isProtectedNonIdempotent(path: string, init: RequestInit) {
+  const method = methodOf(init);
+  return (method === "POST" && /^(\/chat|\/billing\/requests|\/documents(?:\/|$))/.test(path))
+    || (method === "DELETE" && /^\/me(?:\/|$)/.test(path));
+}
+
 export interface ConversationSummary { id: string; title: string; created_at: string }
 export interface Source { filename: string; page: number | null; snippet: string }
 export interface Message { id: string; role: "user" | "assistant"; content: string | null; sources: Source[] | null; created_at: string }
@@ -24,7 +53,7 @@ export interface Usage {
 }
 export interface BillingPackage { id: number; name: string; price_ksh: number; tokens: number | null; premium_days: number | null }
 export interface BillingRequest { id: string; status: "pending" | "approved" | "rejected"; package: string; amount_ksh: number; mpesa_code: string; created_at: string; reject_reason?: string | null }
-export interface AdminRequest { id: string; email: string; full_name?: string | null; package: string; amount_ksh: number; mpesa_code: string; created_at: string }
+export interface AdminRequest { id: string; email: string; full_name?: string | null; package: string; amount_ksh: number; mpesa_code: string; created_at: string; notify_status?: string | null }
 export interface UsageSummary { answers: number; average_input_tokens: number; average_output_tokens: number; per_model: Record<string, number> }
 
 async function accessToken(): Promise<string | null> {
@@ -49,12 +78,29 @@ async function forceLogin(): Promise<void> {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let headers = new Headers(init.headers);
   Object.entries(await authHeaders()).forEach(([key, value]) => headers.set(key, String(value)));
-  let response: Response;
-  try {
-    response = await fetch(`${API_URL}${path}`, { ...init, headers });
-  } catch {
-    throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
+  const protectedPost = isProtectedNonIdempotent(path, init);
+  const attempts = protectedPost ? 1 : RETRY_DELAYS.length + 1;
+  let response: Response | undefined;
+  let waking = false;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      response = await fetch(`${API_URL}${path}`, { ...init, headers });
+    } catch (error) {
+      if (init.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+      if (attempt === attempts - 1) {
+        if (waking) setWaking(false);
+        throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
+      }
+      if (!waking) { waking = true; setWaking(true); }
+      await delay(RETRY_DELAYS[attempt], init.signal);
+      continue;
+    }
+    if (!WAKEABLE_STATUSES.has(response.status) || attempt === attempts - 1) break;
+    if (!waking) { waking = true; setWaking(true); }
+    await delay(RETRY_DELAYS[attempt], init.signal);
   }
+  if (waking) setWaking(false);
+  if (!response) throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
   if (response.status === 401 && supabaseAuthEnabled) {
     if (!supabase) throw new ApiError("Authentication is unavailable.");
     let refreshed: Awaited<ReturnType<typeof supabase.auth.refreshSession>>;
@@ -100,11 +146,13 @@ export const api = {
   billingPackages: () => request<{ packages: BillingPackage[]; till_number: string; message: string }>("/billing/packages"),
   paymentRequests: () => request<BillingRequest[]>("/billing/requests"),
   submitPayment: (packageId: number, mpesaCode: string) => request<{ id: string; status: string }>("/billing/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package_id: packageId, mpesa_code: mpesaCode }) }),
-  adminMe: () => request<{ is_admin: boolean; notifier_configured: boolean }>("/admin/me"),
+  adminMe: () => request<{ is_admin: boolean; notifier_configured: boolean; mailer_configured?: boolean; mail_provider?: "smtp" | "apps_script" | "none" }>("/admin/me"),
   adminRequests: (status: string) => request<AdminRequest[]>(`/admin/requests?status=${encodeURIComponent(status)}`),
   approvePayment: (id: string) => request<{ status: string }>(`/admin/requests/${id}/approve`, { method: "POST" }),
   rejectPayment: (id: string, reason: string) => request<{ status: string }>(`/admin/requests/${id}/reject`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) }),
-  adminGrant: (email: string, tokens: number, premiumDays: number, note: string) => request<{ status: string }>("/admin/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, tokens, premium_days: premiumDays, note }) }),
+  adminGrant: (email: string, tokens: number, premiumDays: number, note: string, notifyUser = true) => request<{ status: string }>("/admin/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, tokens, premium_days: premiumDays, note, notify_user: notifyUser }) }),
+  resendPaymentEmail: (id: string) => request<{ status: string }>(`/admin/requests/${id}/resend-email`, { method: "POST" }),
+  adminEmailTest: () => request<{ provider: string; ok: boolean; error: string; remaining?: number }>("/admin/email-test"),
   adminUsageSummary: () => request<{ last_7_days: UsageSummary; last_30_days: UsageSummary }>("/admin/usage-summary"),
   units: () => sharedGet("units", () => request<Unit[]>("/units")),
   createUnit: (name: string) => request<Unit>("/units", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
@@ -123,7 +171,28 @@ export const api = {
   chatStream: async (message: string, conversationId: string | undefined, unitId: string, signal: AbortSignal) => {
     const headers = new Headers({ "Content-Type": "application/json" });
     Object.entries(await authHeaders()).forEach(([key, value]) => headers.set(key, String(value)));
-    let response = await fetch(`${API_URL}/chat`, { method: "POST", headers, signal, body: JSON.stringify({ message, conversation_id: conversationId ?? null, unit_id: unitId }) });
+    const body = JSON.stringify({ message, conversation_id: conversationId ?? null, unit_id: unitId });
+    let response: Response | undefined;
+    let waking = false;
+    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+      try {
+        response = await fetch(`${API_URL}/chat`, { method: "POST", headers, signal, body });
+      } catch (error) {
+        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+        if (attempt === RETRY_DELAYS.length) {
+          if (waking) setWaking(false);
+          throw error;
+        }
+        if (!waking) { waking = true; setWaking(true); }
+        await delay(RETRY_DELAYS[attempt], signal);
+        continue;
+      }
+      if (!WAKEABLE_STATUSES.has(response.status) || attempt === RETRY_DELAYS.length) break;
+      if (!waking) { waking = true; setWaking(true); }
+      await delay(RETRY_DELAYS[attempt], signal);
+    }
+    if (waking) setWaking(false);
+    if (!response) throw new Error("We couldn't reach ClosedAI.");
     if (response.status === 401 && supabaseAuthEnabled) {
       if (!supabase) return response;
       let refreshed: Awaited<ReturnType<typeof supabase.auth.refreshSession>>;

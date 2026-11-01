@@ -141,6 +141,8 @@ class PaymentRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    notify_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class UsageEvent(Base):

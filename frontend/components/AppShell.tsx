@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ApiError, api, ConversationSummary, Unit, Usage } from "../lib/api";
+import { ApiError, api, ConversationSummary, SERVER_WAKE_MESSAGE, Unit, Usage } from "../lib/api";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
 import { sharedGet, invalidateShared } from "../lib/sharedData";
 
@@ -23,6 +23,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [wakingServer, setWakingServer] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const authPage = ["/login", "/signup", "/forgot-password", "/auth/reset"].includes(pathname);
@@ -64,7 +65,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       if (detail) setConversations(current => current.some(item => item.id === detail.id) ? current : [detail, ...current]);
     };
     window.addEventListener("closedai:conversation-created", refresh);
-    return () => window.removeEventListener("closedai:conversation-created", refresh);
+    const wake = (event: Event) => setWakingServer((event as CustomEvent<boolean>).detail);
+    window.addEventListener("closedai:server-waking", wake);
+    return () => {
+      window.removeEventListener("closedai:conversation-created", refresh);
+      window.removeEventListener("closedai:server-waking", wake);
+    };
   }, []);
 
   useEffect(() => {
@@ -139,6 +145,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const rail = collapsed;
   if (initialError) return <main className="relative z-10 flex h-screen items-center justify-center bg-slate-950 px-5 text-center text-white"><div><p role="alert" className="max-w-md text-slate-200">{initialError}</p><button type="button" onClick={() => void loadWorkspace()} className="mt-4 rounded-lg bg-sky-300 px-4 py-2 font-semibold text-slate-950">Retry</button></div></main>;
   return <div className="app-shell relative z-10 flex h-screen overflow-hidden text-slate-100 supports-[height:100dvh]:h-dvh">
+    {wakingServer && <div role="status" className="fixed inset-x-0 top-3 z-[100] mx-auto flex w-fit items-center gap-3 rounded-xl border border-sky-300/20 bg-slate-900/95 px-4 py-3 text-sm text-slate-100 shadow-xl">
+      <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-300 border-t-transparent" />
+      <span>{SERVER_WAKE_MESSAGE}</span>
+    </div>}
     <header className="app-mobile-bar md:hidden">
       <button onClick={() => setOpen(!open)} aria-label="Toggle navigation">☰</button>
       <Link href="/" className="app-mobile-home" onClick={() => setOpen(false)}><span aria-hidden="true">⌂</span> Home</Link>

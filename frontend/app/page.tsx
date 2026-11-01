@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
+import { wakeBackend } from "../lib/wakeBackend";
 
 const CrawlerCanvas = dynamic(() => import("../components/crawler/CrawlerCanvas").then(module => module.CrawlerCanvas), { ssr: false });
 
@@ -36,6 +37,7 @@ function LandingPage({ signedIn }: { signedIn: boolean }) {
   const [deletedMessage, setDeletedMessage] = useState(false);
   useEffect(() => {
     setDeletedMessage(new URLSearchParams(window.location.search).get("deleted") === "success");
+    wakeBackend();
   }, []);
   const demos: Record<string, { note: string; detail: string }> = {
     Ask: { note: "What explains recursive descent parsing?", detail: "An answer drawn from your lecture notes, with the source attached." },

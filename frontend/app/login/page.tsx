@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { AuthShell } from "../../components/auth/AuthShell";
+import { wakeBackend } from "../../lib/wakeBackend";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -14,6 +15,7 @@ export default function LoginPage() {
   const [resetSuccess, setResetSuccess] = useState(false);
   const [unconfirmed, setUnconfirmed] = useState(false);
   useEffect(() => {
+    wakeBackend();
     setResetSuccess(new URLSearchParams(window.location.search).get("reset") === "success");
     const emailParam = new URLSearchParams(window.location.search).get("email");
     if (emailParam) setEmail(emailParam);

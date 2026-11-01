@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     mpesa_till_number: str = ""
     admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
     admin_notify_email: str = ""
+    mail_provider: Literal["smtp", "apps_script", "none"] = "none"
+    apps_script_url: str = ""
+    mail_secret: str = ""
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 465
+    smtp_security: Literal["ssl", "starttls"] = "ssl"
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "ClosedAI"
     resend_api_key: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

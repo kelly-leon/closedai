@@ -2,6 +2,7 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta
+from html import escape
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
@@ -15,7 +16,9 @@ from app.auth.factory import get_auth_provider
 from app.config import get_settings
 from app.db.models import AuditLog, Package, PaymentRequest, RedeemCode, User, UserPlan, UsageEvent
 from app.db.session import get_db
+from app.mailer import mailer_configured, send_email, send_email_detail, send_email_result
 from app.notify import configured_providers, notify_payment, send_notification
+from app.rate_limit import rate_limit
 from app.usage import apply_daily_reset, apply_weekly_reset, code_hash, documents_used, ensure_plan, normalize_code, trial_remaining, valid_admin_key
 
 router = APIRouter(tags=["billing"])
@@ -23,6 +26,10 @@ bearer = HTTPBearer(auto_error=False)
 failures: dict[UUID, list[float]] = {}
 failures_lock = threading.Lock()
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+class _DirectBackgroundTasks(BackgroundTasks):
+    pass
 
 
 def generate_code() -> str:
@@ -55,6 +62,7 @@ class GrantPayload(BaseModel):
     tokens: int = 0
     premium_days: int = 0
     note: str = ""
+    notify_user: bool = True
 
 
 def admin_claims(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
@@ -67,13 +75,44 @@ def admin_claims(credentials: HTTPAuthorizationCredentials | None = Depends(bear
 
 
 @router.get("/admin/me")
-def admin_me(claims=Depends(admin_claims)) -> dict[str, bool]:
-    return {"is_admin": True, "notifier_configured": bool(configured_providers())}
+def admin_me(claims=Depends(admin_claims)) -> dict[str, object]:
+    settings = get_settings()
+    return {"is_admin": True, "notifier_configured": bool(configured_providers()), "mailer_configured": mailer_configured(), "mail_provider": settings.mail_provider}
 
 
 @router.get("/admin/notify-test")
 def notify_test(claims=Depends(admin_claims)) -> list[dict[str, object]]:
     return send_notification("ClosedAI notification test. If you received this, alerts are working.")
+
+
+@router.get("/admin/email-test")
+def email_test(claims=Depends(admin_claims)) -> dict[str, object]:
+    email = str(claims.get("email", "")).strip()
+    settings = get_settings()
+    if not mailer_configured():
+        return {"provider": settings.mail_provider, "ok": False, "error": "mailer disabled"}
+    sent, error, remaining = send_email_detail(email, "ClosedAI email test", "This is a ClosedAI email test.", "<p>This is a ClosedAI email test.</p>")
+    result: dict[str, object] = {"provider": settings.mail_provider, "ok": sent, "error": "" if sent else error}
+    if remaining is not None:
+        result["remaining"] = remaining
+    return result
+
+
+@router.post("/admin/requests/{request_id}/resend-email")
+def resend_request_email(request_id: UUID, claims=Depends(admin_claims), db: Session = Depends(get_db)) -> dict[str, object]:
+    rate_limit(f"admin-resend-email:{claims.get('email', '')}", 5, 60, "Too many email resend attempts. Please wait before trying again.")
+    row = db.get(PaymentRequest, request_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if row.notify_status not in {None, "failed"}:
+        raise HTTPException(status_code=409, detail="This email does not need to be resent.")
+    row.notify_status = None
+    db.commit()
+    if row.status == "rejected":
+        _send_payment_rejection(db, row)
+    else:
+        _send_payment_award(db, row)
+    return {"status": row.notify_status}
 
 
 @router.post("/admin/codes")
@@ -171,6 +210,100 @@ def user_requests(user_id: UUID = Depends(current_user), db: Session = Depends(g
              "reject_reason": row.reject_reason} for row in rows]
 
 
+def _first_name(user: User | None) -> str:
+    if user and user.full_name:
+        return clean_name(user.full_name.split()[0])
+    return "there"
+
+
+def clean_name(value: str) -> str:
+    return value.replace("\r", "").replace("\n", "").strip()
+
+
+def _award_content(user: User, package: Package, plan: UserPlan, mpesa_code: str = "") -> tuple[str, str, str]:
+    settings = get_settings()
+    front_url = settings.frontend_url.rstrip("/")
+    first_name = _first_name(user)
+    premium = plan.premium_until
+    if package.premium_days and premium:
+        award = f"Premium access until {premium.strftime('%Y-%m-%d')}"
+    else:
+        award = f"{package.tokens or 0:,} tokens added"
+    code_line = f"M-Pesa code ending: {mpesa_code[-4:]}" if mpesa_code else ""
+    app_url = f"{front_url}/app"
+    date = datetime.utcnow().strftime("%Y-%m-%d")
+    subject = "Your ClosedAI tokens have been added"
+    text_lines = [
+        f"Hi {first_name},",
+        "",
+        f"Your {package.name} package was applied.",
+        award,
+        f"New token balance: {plan.token_balance:,}",
+        code_line,
+        f"Date: {date}",
+        f"Open ClosedAI: {app_url}",
+        "Please reply if anything looks wrong.",
+    ]
+    text = "\n".join(line for line in text_lines if line)
+    html = "<p>" + escape(f"Hi {first_name},") + "</p>"
+    html += "<p>" + escape(f"Your {package.name} package was applied.") + "<br>"
+    html += escape(award) + "<br>" + escape(f"New token balance: {plan.token_balance:,}")
+    if code_line:
+        html += "<br>" + escape(code_line)
+    html += "<br>" + escape(f"Date: {date}") + "</p>"
+    html += f'<p><a href="{escape(app_url, quote=True)}">Open ClosedAI</a></p>'
+    html += "<p>Please reply if anything looks wrong.</p>"
+    return subject, text, html
+
+
+def _record_payment_email(db: Session, request: PaymentRequest, sent: bool) -> None:
+    request.notified_at = datetime.utcnow() if sent else request.notified_at
+    request.notify_status = "sent" if sent else "failed"
+    db.commit()
+
+
+def _send_payment_award(db: Session, request: PaymentRequest) -> None:
+    if request.notify_status == "sent":
+        return
+    if not mailer_configured():
+        request.notify_status = "skipped"
+        db.commit()
+        return
+    user = db.get(User, request.user_id)
+    package = db.get(Package, request.package_id)
+    plan = ensure_plan(db, request.user_id)
+    if user is None or package is None or not user.email:
+        request.notify_status = "skipped"
+        db.commit()
+        return
+    subject, text, html = _award_content(user, package, plan, request.mpesa_code)
+    sent = send_email(user.email, subject, text, html)
+    _record_payment_email(db, request, sent)
+
+
+def _send_payment_rejection(db: Session, request: PaymentRequest) -> None:
+    if request.notify_status == "sent":
+        return
+    if not mailer_configured():
+        request.notify_status = "skipped"
+        db.commit()
+        return
+    user = db.get(User, request.user_id)
+    if user is None or not user.email:
+        request.notify_status = "skipped"
+        db.commit()
+        return
+    settings = get_settings()
+    front_url = settings.frontend_url.rstrip("/")
+    reason = request.reject_reason or "No reason was provided."
+    subject = "Your ClosedAI payment request was not approved"
+    text = f"Your payment request was not approved.\nReason: {reason}\nReview packages: {front_url}/upgrade"
+    html = "<p>Your payment request was not approved.</p>"
+    html += f"<p>{escape('Reason: ' + reason)}</p>"
+    html += f'<p><a href="{escape(front_url + "/upgrade", quote=True)}">Review ClosedAI packages</a></p>'
+    _record_payment_email(db, request, send_email(user.email, subject, text, html))
+
+
 @router.get("/admin/requests")
 def admin_requests(status: str = "pending", claims=Depends(admin_claims), db: Session = Depends(get_db)) -> list[dict[str, object]]:
     if status not in {"pending", "approved", "rejected"}:
@@ -181,12 +314,13 @@ def admin_requests(status: str = "pending", claims=Depends(admin_claims), db: Se
         user = db.get(User, row.user_id)
         package = db.get(Package, row.package_id)
         result.append({"id": str(row.id), "email": user.email if user else "", "full_name": user.full_name if user else None, "package": package.name if package else "",
-                       "amount_ksh": row.amount_ksh, "mpesa_code": row.mpesa_code, "created_at": row.created_at.isoformat()})
+                       "amount_ksh": row.amount_ksh, "mpesa_code": row.mpesa_code, "created_at": row.created_at.isoformat(),
+                       "notify_status": row.notify_status})
     return result
 
 
 @router.post("/admin/requests/{request_id}/approve")
-def approve_request(request_id: UUID, claims=Depends(admin_claims), db: Session = Depends(get_db)) -> dict[str, object]:
+def approve_request(request_id: UUID, claims=Depends(admin_claims), db: Session = Depends(get_db), background_tasks: BackgroundTasks = _DirectBackgroundTasks()) -> dict[str, object]:
     from sqlalchemy import update
     now = datetime.utcnow()
     result = db.execute(update(PaymentRequest).where(PaymentRequest.id == request_id, PaymentRequest.status == "pending").values(status="approved", reviewed_at=now, reviewed_by=str(claims.get("email", ""))))
@@ -200,21 +334,30 @@ def approve_request(request_id: UUID, claims=Depends(admin_claims), db: Session 
     if package.premium_days:
         plan.premium_until = max(now, plan.premium_until or datetime.min) + timedelta(days=package.premium_days)
     db.commit()
+    if not isinstance(background_tasks, _DirectBackgroundTasks):
+        background_tasks.add_task(_send_payment_award, db, row)
+    else:
+        _send_payment_award(db, row)
     return {"status": "approved"}
 
 
 @router.post("/admin/requests/{request_id}/reject")
-def reject_request(request_id: UUID, payload: RejectPayload, claims=Depends(admin_claims), db: Session = Depends(get_db)) -> dict[str, object]:
+def reject_request(request_id: UUID, payload: RejectPayload, claims=Depends(admin_claims), db: Session = Depends(get_db), background_tasks: BackgroundTasks = _DirectBackgroundTasks()) -> dict[str, object]:
     from sqlalchemy import update
     result = db.execute(update(PaymentRequest).where(PaymentRequest.id == request_id, PaymentRequest.status == "pending").values(status="rejected", reject_reason=payload.reason, reviewed_at=datetime.utcnow(), reviewed_by=str(claims.get("email", ""))))
     if result.rowcount != 1:
         raise HTTPException(status_code=409, detail="Request has already been reviewed.")
     db.commit()
+    row = db.get(PaymentRequest, request_id)
+    if not isinstance(background_tasks, _DirectBackgroundTasks):
+        background_tasks.add_task(_send_payment_rejection, db, row)
+    else:
+        _send_payment_rejection(db, row)
     return {"status": "rejected"}
 
 
 @router.post("/admin/grant")
-def admin_grant(payload: GrantPayload, claims=Depends(admin_claims), db: Session = Depends(get_db)) -> dict[str, object]:
+def admin_grant(payload: GrantPayload, claims=Depends(admin_claims), db: Session = Depends(get_db), background_tasks: BackgroundTasks = _DirectBackgroundTasks()) -> dict[str, object]:
     user = db.scalar(select(User).where(func.lower(User.email) == payload.email.strip().lower()))
     if user is None or payload.tokens < 0 or payload.premium_days < 0 or not (payload.tokens or payload.premium_days):
         raise HTTPException(status_code=400, detail="Unable to grant tokens.")
@@ -225,6 +368,13 @@ def admin_grant(payload: GrantPayload, claims=Depends(admin_claims), db: Session
     plan.has_purchased = plan.has_purchased or bool(payload.tokens)
     db.add(AuditLog(admin_email=str(claims.get("email", "")), target_user_id=user.id, change=f"{payload.note}; tokens={payload.tokens}; premium_days={payload.premium_days}".strip("; ")))
     db.commit()
+    if payload.notify_user:
+        package = Package(name="Manual grant", tokens=payload.tokens, premium_days=payload.premium_days, price_ksh=0, active=True)
+        subject, text, html = _award_content(user, package, plan)
+        if not isinstance(background_tasks, _DirectBackgroundTasks):
+            background_tasks.add_task(send_email, user.email or "", subject, text, html)
+        else:
+            send_email(user.email or "", subject, text, html)
     return {"status": "granted"}
 
 
