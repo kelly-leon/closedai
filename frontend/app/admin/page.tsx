@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AdminRequest, api, UsageSummary } from "../../lib/api";
+import { AdminRequest, ApiError, api, UsageSummary } from "../../lib/api";
 
 type Tab = "pending" | "approved" | "rejected";
 
@@ -11,6 +11,7 @@ export default function AdminPage() {
   const [allowed, setAllowed] = useState(false);
   const [tab, setTab] = useState<Tab>("pending");
   const [requests, setRequests] = useState<Record<Tab, AdminRequest[]>>({ pending: [], approved: [], rejected: [] });
+  const [requestsError, setRequestsError] = useState<ApiError | null>(null);
   const [summary, setSummary] = useState<{ last_7_days: UsageSummary; last_30_days: UsageSummary } | null>(null);
   const [busy, setBusy] = useState("");
   const [email, setEmail] = useState("");
@@ -26,8 +27,13 @@ export default function AdminPage() {
 
   async function refresh() {
     const statuses: Tab[] = ["pending", "approved", "rejected"];
-    const values = await Promise.all(statuses.map(status => api.adminRequests(status)));
-    setRequests({ pending: values[0], approved: values[1], rejected: values[2] });
+    try {
+      const values = await Promise.all(statuses.map(status => api.adminRequests(status)));
+      setRequests({ pending: values[0], approved: values[1], rejected: values[2] });
+      setRequestsError(null);
+    } catch (caught) {
+      setRequestsError(caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again."));
+    }
   }
   useEffect(() => {
     void api.adminMe().then(async status => { setNotifierConfigured(status.notifier_configured); setMailerConfigured(status.mailer_configured !== false); setMailProvider(status.mail_provider ?? "smtp"); setAllowed(true); await refresh(); void api.adminUsageSummary().then(setSummary).catch(() => undefined); }).catch(() => router.replace("/"));
@@ -91,7 +97,8 @@ export default function AdminPage() {
           {tab === "pending" && <div className="mt-4 flex gap-2"><button disabled={Boolean(busy)} onClick={() => void approve(request)} className="rounded bg-emerald-300 px-3 py-2 font-semibold text-slate-950 disabled:opacity-50">Approve</button><button disabled={Boolean(busy)} onClick={() => void reject(request)} className="rounded bg-red-300 px-3 py-2 font-semibold text-slate-950 disabled:opacity-50">Reject</button></div>}
           {tab !== "pending" && request.notify_status === "failed" && <button disabled={Boolean(busy)} onClick={async () => { setBusy(request.id); try { await api.resendPaymentEmail(request.id); await refresh(); } finally { setBusy(""); } }} className="mt-3 rounded border border-sky-300 px-3 py-2 text-sm">Resend email</button>}
         </div>)}
-        {requests[tab].length === 0 && <p className="text-slate-300">No {tab} requests.</p>}
+        {requestsError && <div role="alert" className="rounded-lg border border-red-300/30 bg-red-950/70 p-3 text-red-100"><p>We couldn't load this. Try again.{requestsError.requestId ? ` Request ID: ${requestsError.requestId}` : ""}</p><button type="button" onClick={() => void refresh()} className="mt-2 rounded bg-white px-3 py-1.5 text-sm font-semibold text-slate-950">Retry</button></div>}
+        {!requestsError && requests[tab].length === 0 && <p className="text-slate-300">No {tab} requests.</p>}
       </div>
       <section className="app-admin-section mt-10">
         <h2 className="text-xl font-semibold">Manual grant</h2>

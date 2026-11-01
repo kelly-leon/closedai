@@ -4,7 +4,7 @@ import { sharedGet, invalidateShared } from "./sharedData";
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly retryable = false, public readonly code?: string) {
+  constructor(message: string, public readonly retryable = false, public readonly code?: string, public readonly requestId?: string) {
     super(message);
     this.name = "ApiError";
   }
@@ -126,17 +126,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
   }
   if (!response.ok) {
-    if (response.status >= 500) throw new ApiError("ClosedAI is having trouble right now. Please try again.", true);
-    let detail = "Something went wrong. Please try again.";
+    let detail = response.status >= 500 ? "ClosedAI is having trouble right now. Please try again." : "Something went wrong. Please try again.";
     let structuredPayload: unknown;
+    let requestId = response.headers.get("X-Request-ID") ?? undefined;
     try {
-      const body = await response.json() as { detail?: unknown; message?: string };
+      const body = await response.json() as { detail?: unknown; message?: string; request_id?: string };
+      if (!requestId) requestId = body.request_id;
       const payload = body.detail ?? body;
       structuredPayload = payload;
       detail = typeof payload === "string" ? payload : typeof payload === "object" && payload && "message" in payload ? String((payload as { message: unknown }).message) : detail;
     } catch { /* friendly fallback */ }
     const code = typeof structuredPayload === "object" && structuredPayload && "code" in structuredPayload ? String((structuredPayload as { code: unknown }).code) : undefined;
-    throw new ApiError(detail, false, code);
+    throw new ApiError(detail, response.status >= 500, code, requestId);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

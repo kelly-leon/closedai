@@ -14,6 +14,7 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const [unitId, setUnitId] = useState("");
@@ -22,7 +23,13 @@ export default function DocumentsPage() {
   async function load() {
     const selected = window.localStorage.getItem("closedai-unit-id");
     if (!selected) return;
-    try { setDocuments(await sharedGet(`documents:${selected}`, () => api.documents(selected))); } catch { /* Keep existing content visible. */ } finally { setLoading(false); }
+    setLoading(true);
+    try {
+      setDocuments(await sharedGet(`documents:${selected}`, () => api.documents(selected)));
+      setLoadError(null);
+    } catch (caught) {
+      setLoadError(caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again."));
+    } finally { setLoading(false); }
   }
   useEffect(() => {
     const selected = window.localStorage.getItem("closedai-unit-id") ?? "";
@@ -86,7 +93,7 @@ export default function DocumentsPage() {
       </div>
       {limitReached && <div role="alert" className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-amber-300/40 bg-amber-950/85 p-4 text-white"><span>You’ve reached your document allowance. Upgrade to keep adding files.</span><Link href="/upgrade" className="rounded-full bg-white px-3 py-1 font-semibold text-slate-950">Upgrade</Link></div>}
       {uploads.length > 0 && <div className="mt-4 space-y-2">{uploads.map((item, index) => <div key={`${item.name}-${index}`} className="rounded-lg border p-3 dark:border-slate-800"><div className="flex justify-between text-sm"><span className="truncate">{item.name}</span><span>{item.error ?? `${item.progress}%`}</span></div>{item.error && item.retryable && <button type="button" onClick={() => void retryUpload(item)} className="mt-2 text-sm font-medium text-blue-600">Retry</button>}{!item.error && <div className="mt-2 h-1 overflow-hidden rounded bg-slate-200"><div className="h-full bg-slate-900" style={{ width: `${item.progress}%` }} /></div>}</div>)}</div>}
-      {loading ? <div className="mt-8 h-24 animate-pulse bg-white/5" /> : documents.length === 0 ? <div className="py-16 text-center text-slate-100"><p>No documents yet.</p><p className="mt-1 text-sm text-slate-300">Upload one above to start asking grounded questions.</p></div> : <div className="mt-8">{documents.map(document => <div key={document.id} className="app-row flex items-center gap-3"><div className="min-w-0 flex-1"><p className="truncate font-medium">{document.filename}</p>{document.status === "failed" && <p className="mt-1 text-xs text-red-300">{document.error_message || "Processing failed."}</p>}</div><span className="text-xs font-medium capitalize" data-status={document.status}><i className={`status-dot ${document.status}`} />{document.status}</span>{document.status === "failed" && <button onClick={() => void retry(document.id)} className="app-text-button text-sm">Retry</button>}<button onClick={() => void remove(document.id, document.filename)} className="app-text-button text-sm text-red-300" aria-label={`Delete ${document.filename}`}>Delete</button></div>)}</div>}
+      {loading ? <div className="mt-8 h-24 animate-pulse bg-white/5" /> : loadError ? <div role="alert" className="mt-8 rounded-lg border border-red-300/30 bg-red-950/70 p-4 text-red-100"><p>We couldn't load this. Try again.{loadError.requestId ? ` Request ID: ${loadError.requestId}` : ""}</p><button type="button" onClick={() => void load()} className="mt-3 rounded bg-white px-3 py-1.5 text-sm font-semibold text-slate-950">Retry</button></div> : documents.length === 0 ? <div className="py-16 text-center text-slate-100"><p>No documents yet.</p><p className="mt-1 text-sm text-slate-300">Upload one above to start asking grounded questions.</p></div> : <div className="mt-8">{documents.map(document => <div key={document.id} className="app-row flex items-center gap-3"><div className="min-w-0 flex-1"><p className="truncate font-medium">{document.filename}</p>{document.status === "failed" && <p className="mt-1 text-xs text-red-300">{document.error_message || "Processing failed."}</p>}</div><span className="text-xs font-medium capitalize" data-status={document.status}><i className={`status-dot ${document.status}`} />{document.status}</span>{document.status === "failed" && <button onClick={() => void retry(document.id)} className="app-text-button text-sm">Retry</button>}<button onClick={() => void remove(document.id, document.filename)} className="app-text-button text-sm text-red-300" aria-label={`Delete ${document.filename}`}>Delete</button></div>)}</div>}
     </div>
   </div>;
 }

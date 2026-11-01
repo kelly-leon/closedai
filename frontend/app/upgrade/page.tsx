@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, BillingPackage, BillingRequest } from "../../lib/api";
+import { ApiError, api, BillingPackage, BillingRequest } from "../../lib/api";
 
 export default function UpgradePage() {
   const [packages, setPackages] = useState<BillingPackage[]>([]);
@@ -9,15 +9,23 @@ export default function UpgradePage() {
   const [selected, setSelected] = useState<number | null>(null);
   const [code, setCode] = useState("");
   const [requests, setRequests] = useState<BillingRequest[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(true);
+  const [requestsError, setRequestsError] = useState<ApiError | null>(null);
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function refresh() {
+    setRequestsLoading(true);
     try {
       const data = await api.paymentRequests();
       setRequests(data);
-    } catch { /* Keep the existing request list visible. */ }
+      setRequestsError(null);
+    } catch (caught) {
+      setRequestsError(caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again."));
+    } finally {
+      setRequestsLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -89,7 +97,9 @@ export default function UpgradePage() {
             </div>
             {request.status === "rejected" && request.reject_reason && <p className="mt-2 text-sm text-red-200">Reason: {request.reject_reason}</p>}
           </div>)}
-          {requests.length === 0 && <p className="text-sm text-slate-300">No requests yet.</p>}
+          {requestsLoading && <p className="text-sm text-slate-300">Loading requests...</p>}
+          {!requestsLoading && requestsError && <div role="alert" className="rounded-lg border border-red-300/30 bg-red-950/70 p-3 text-red-100"><p>We couldn't load this. Try again.{requestsError.requestId ? ` Request ID: ${requestsError.requestId}` : ""}</p><button type="button" onClick={() => void refresh()} className="mt-2 rounded bg-white px-3 py-1.5 text-sm font-semibold text-slate-950">Retry</button></div>}
+          {!requestsLoading && !requestsError && requests.length === 0 && <p className="text-sm text-slate-300">No requests yet.</p>}
         </div>
       </section>
     </div>

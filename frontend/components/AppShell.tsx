@@ -10,6 +10,7 @@ import { sharedGet, invalidateShared } from "../lib/sharedData";
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [conversationsError, setConversationsError] = useState<ApiError | null>(null);
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [units, setUnits] = useState<Unit[]>([]);
@@ -31,8 +32,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   async function load() {
     if (!unitId) return;
-    try { setConversations(await api.conversations(unitId)); } catch { setConversations([]); }
-    finally { setLoading(false); }
+    setLoading(true);
+    try {
+      setConversations(await api.conversations(unitId));
+      setConversationsError(null);
+    } catch (caught) {
+      setConversationsError(caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again."));
+    } finally { setLoading(false); }
   }
   async function loadWorkspace() {
     setInitialError("");
@@ -177,7 +183,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {!rail && <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" aria-label="Conversations">
         <p className="px-2 text-xs font-semibold uppercase tracking-wide text-slate-300 [text-shadow:_0_1px_3px_rgba(0,0,0,0.9)]">Chats</p>
         {loading && <div className="mt-2 h-10 animate-pulse rounded-lg bg-slate-600/30" />}
-        {!loading && conversations.length === 0 && <p className="px-2 py-4 text-sm text-slate-300">No conversations yet.</p>}
+        {!loading && conversationsError && <div role="alert" className="px-2 py-4 text-sm text-red-200"><p>We couldn't load this. Try again.{conversationsError.requestId ? ` Request ID: ${conversationsError.requestId}` : ""}</p><button type="button" onClick={() => void load()} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
+        {!loading && !conversationsError && conversations.length === 0 && <p className="px-2 py-4 text-sm text-slate-300">No conversations yet.</p>}
         {conversations.map(item => <div key={item.id} className={`app-conversation group mt-1 flex items-center ${pathname === `/chat/${item.id}` ? "active text-white" : "text-slate-200"}`}>
           <Link href={`/chat/${item.id}`} onClick={() => setOpen(false)} className="min-w-0 flex-1 truncate px-3 py-2 text-sm text-slate-100">{item.title}</Link>
           <button onClick={() => void remove(item.id)} className="invisible px-2 text-slate-300 group-hover:visible" aria-label={`Delete ${item.title}`}>×</button>

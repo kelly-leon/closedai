@@ -5,8 +5,12 @@ import logging
 import threading
 from contextvars import ContextVar
 from datetime import datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -103,13 +107,6 @@ def validate_startup_config() -> None:
         raise RuntimeError("Hosted mode does not allow wildcard or localhost CORS origins.")
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=False,
-    allow_methods=["DELETE", "GET", "POST", "PUT", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-)
 app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(units_router)
@@ -148,6 +145,16 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
+# Register this last so Starlette treats CORS as the outermost middleware.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=False,
+    allow_methods=["DELETE", "GET", "POST", "PUT", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+)
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     if exc.status_code == 402 and isinstance(exc.detail, dict):
@@ -171,7 +178,25 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         request_id,
         extra={"request_id": request_id},
     )
-    return JSONResponse(status_code=500, content={"detail": "Internal server error", "request_id": request_id}, headers={"X-Request-ID": request_id})
+    headers = {"X-Request-ID": request_id}
+    origin = request.headers.get("origin")
+    if origin and ("*" in settings.cors_origins or origin in settings.cors_origins):
+        headers["Access-Control-Allow-Origin"] = origin if "*" not in settings.cors_origins else "*"
+    return JSONResponse(status_code=500, content={"detail": "Something went wrong", "request_id": request_id}, headers=headers)
+
+
+def check_database_migrations() -> bool:
+    try:
+        backend_dir = Path(__file__).resolve().parents[1]
+        config = Config(str(backend_dir / "alembic.ini"))
+        config.set_main_option("script_location", str(backend_dir / "alembic"))
+        head_revision = ScriptDirectory.from_config(config).get_current_head()
+        with get_engine().connect() as connection:
+            current_revision = MigrationContext.configure(connection).get_current_revision()
+        return current_revision == head_revision
+    except Exception:
+        logging.getLogger(__name__).exception("Database migration revision check failed")
+        return False
 
 
 def recover_interrupted_documents() -> int:
@@ -231,6 +256,8 @@ def startup_tasks() -> None:
     """Create the fixed self-hosted user when it does not exist."""
     validate_startup_config()
     validate_embedding_dimension()
+    if settings.mode == "hosted" and not check_database_migrations():
+        logging.getLogger(__name__).error("DATABASE MIGRATIONS ARE BEHIND: run alembic upgrade head")
     recover_interrupted_documents()
     if settings.mode == "selfhosted":
         from uuid import UUID
@@ -253,11 +280,12 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-def ready() -> dict[str, str]:
-    """Report readiness based on database connectivity."""
+def ready() -> dict[str, object]:
+    """Report readiness based on database connectivity and migrations."""
     with get_engine().connect() as connection:
         connection.execute(text("SELECT 1"))
-    return {"status": "ready"}
+    migration_ok = check_database_migrations() if settings.mode == "hosted" else True
+    return {"status": "ready", "migration_ok": migration_ok}
 
 
 # TODO: Add upload, ingestion, search, and conversation routes.

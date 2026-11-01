@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -66,6 +67,25 @@ def test_hosted_cors_guard(monkeypatch):
     monkeypatch.setattr(settings, "cors_origins", ["*"])
     with pytest.raises(RuntimeError, match="CORS"):
         validate_startup_config()
+
+
+def test_unhandled_error_has_cors_headers_for_allowed_origin():
+    from app.main import app
+
+    @app.get("/__cors_error_test")
+    def cors_error_test():
+        raise RuntimeError("test failure")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    allowed = client.get("/__cors_error_test", headers={"Origin": "http://localhost:3000"})
+    assert allowed.status_code == 500
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert allowed.json()["detail"] == "Something went wrong"
+    assert allowed.json()["request_id"]
+
+    denied = client.get("/__cors_error_test", headers={"Origin": "https://denied.example"})
+    assert denied.status_code == 500
+    assert "access-control-allow-origin" not in denied.headers
 
 
 def test_account_deletion_removes_owned_data(monkeypatch):
