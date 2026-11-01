@@ -5,7 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ApiError, api, ConversationSummary, SERVER_WAKE_MESSAGE, Unit, Usage } from "../lib/api";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
-import { sharedGet, invalidateShared } from "../lib/sharedData";
+import { invalidateShared } from "../lib/sharedData";
+import { installQueryLifecycleListeners } from "../lib/query";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -20,11 +21,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [userEmail, setUserEmail] = useState("");
   const [userName, setUserName] = useState("");
   const [initialError, setInitialError] = useState("");
+  const [unitsError, setUnitsError] = useState<ApiError | null>(null);
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [wakingServer, setWakingServer] = useState(false);
+  const [slowLoading, setSlowLoading] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const authPage = ["/login", "/signup", "/forgot-password", "/auth/reset"].includes(pathname);
@@ -41,19 +44,38 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     } finally { setLoading(false); }
   }
   async function loadWorkspace() {
+    const startedAt = Date.now();
+    setSlowLoading(false);
+    const slowTimer = window.setTimeout(() => setSlowLoading(true), 8000);
     setInitialError("");
+    if (supabaseAuthEnabled && supabase) {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) return;
+    }
+    const saved = window.localStorage.getItem("closedai-unit-id") ?? undefined;
     try {
-      const [items, currentUsage] = await Promise.all([
-        sharedGet("units", api.units),
-        sharedGet("usage", api.usage),
-      ]);
-      setUnits(items);
-      setUsage(currentUsage);
-      const saved = window.localStorage.getItem("closedai-unit-id");
-      const selected = items.find(item => item.id === saved) ?? items[0];
-      if (selected) { setUnitId(selected.id); window.localStorage.setItem("closedai-unit-id", selected.id); }
-    } catch (error) {
-      if (error instanceof ApiError && error.retryable) setInitialError(error.message);
+      const bootstrap = await api.bootstrap(saved);
+      setUnits(bootstrap.units);
+      setUsage(bootstrap.usage);
+      setConversations(bootstrap.conversations);
+      setUnitsError(null);
+      const selected = bootstrap.units.find(item => item.id === saved) ?? bootstrap.units[0];
+      if (selected) {
+        setUnitId(selected.id);
+        window.localStorage.setItem("closedai-unit-id", selected.id);
+      } else {
+        setUnitId("");
+        window.localStorage.removeItem("closedai-unit-id");
+      }
+      setLoading(false);
+      window.clearTimeout(slowTimer);
+      if (process.env.NODE_ENV === "development") console.info(`[ClosedAI] initial shell request: ${Date.now() - startedAt}ms`);
+    } catch (caught) {
+      const error = caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again.");
+      setUnitsError(error);
+      setInitialError("");
+      window.clearTimeout(slowTimer);
+      window.setTimeout(() => void loadWorkspace(), 15_000);
     }
   }
 
@@ -64,6 +86,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       const metadata = data.user?.user_metadata as { full_name?: string } | undefined;
       setUserName(metadata?.full_name?.trim() ?? "");
     });
+    installQueryLifecycleListeners();
     setCollapsed(window.localStorage.getItem("closedai-sidebar-collapsed") === "true");
     void loadWorkspace();
     const refresh = (event: Event) => {
@@ -183,8 +206,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {!rail && <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" aria-label="Conversations">
         <p className="px-2 text-xs font-semibold uppercase tracking-wide text-slate-300 [text-shadow:_0_1px_3px_rgba(0,0,0,0.9)]">Chats</p>
         {loading && <div className="mt-2 h-10 animate-pulse rounded-lg bg-slate-600/30" />}
+        {loading && slowLoading && <div className="px-2 py-3 text-sm text-slate-300"><p>Still loading...</p><button type="button" onClick={() => void loadWorkspace()} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
         {!loading && conversationsError && <div role="alert" className="px-2 py-4 text-sm text-red-200"><p>We couldn't load this. Try again.{conversationsError.requestId ? ` Request ID: ${conversationsError.requestId}` : ""}</p><button type="button" onClick={() => void load()} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
-        {!loading && !conversationsError && conversations.length === 0 && <p className="px-2 py-4 text-sm text-slate-300">No conversations yet.</p>}
+        {unitsError && !loading && <div role="alert" className="px-2 py-4 text-sm text-red-200"><p>Couldn't load your units. Retry</p>{unitsError.requestId && <p className="mt-1">Request ID: {unitsError.requestId}</p>}<button type="button" onClick={() => void loadWorkspace()} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
+        {!loading && !conversationsError && !unitsError && conversations.length === 0 && <p className="px-2 py-4 text-sm text-slate-300">No conversations yet.</p>}
         {conversations.map(item => <div key={item.id} className={`app-conversation group mt-1 flex items-center ${pathname === `/chat/${item.id}` ? "active text-white" : "text-slate-200"}`}>
           <Link href={`/chat/${item.id}`} onClick={() => setOpen(false)} className="min-w-0 flex-1 truncate px-3 py-2 text-sm text-slate-100">{item.title}</Link>
           <button onClick={() => void remove(item.id)} className="invisible px-2 text-slate-300 group-hover:visible" aria-label={`Delete ${item.title}`}>×</button>

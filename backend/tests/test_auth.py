@@ -131,6 +131,50 @@ def test_valid_token_gets_usage_200_on_first_request(monkeypatch) -> None:
         app.dependency_overrides.clear()
 
 
+def test_bootstrap_is_user_scoped_and_has_stable_shape(monkeypatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mode", "selfhosted")
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    from app.db.models import Base, Chunk, Conversation, Document, Unit, User
+    Base.metadata.create_all(engine, tables=[User.__table__, Unit.__table__, Document.__table__, Chunk.__table__, Conversation.__table__])
+    owner_id = uuid4()
+    other_id = uuid4()
+    owner_unit_id = uuid4()
+    other_unit_id = uuid4()
+    owner_unit = Unit(id=owner_unit_id, user_id=owner_id, name="Owner")
+    other_unit = Unit(id=other_unit_id, user_id=other_id, name="Other")
+    with Session(engine) as db:
+        db.add_all([
+            User(id=owner_id),
+            User(id=other_id),
+            owner_unit,
+            other_unit,
+            Conversation(id=uuid4(), user_id=owner_id, unit_id=owner_unit.id, title="Own chat"),
+            Conversation(id=uuid4(), user_id=other_id, unit_id=other_unit.id, title="Other chat"),
+        ])
+        db.commit()
+
+    def db_session():
+        with Session(engine) as db:
+            yield db
+
+    from app.api_documents import current_user
+    from app.main import app
+    from app.db.session import get_db
+    app.dependency_overrides[current_user] = lambda: owner_id
+    app.dependency_overrides[get_db] = db_session
+    try:
+        response = TestClient(app).get(f"/me/bootstrap?unit_id={other_unit_id}")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert set(response.json()) == {"units", "usage", "conversations", "admin"}
+        assert {item["name"] for item in response.json()["units"]} == {"Owner", "General"}
+        assert [item["title"] for item in response.json()["conversations"]] == ["Own chat"]
+        assert "Other chat" not in [item["title"] for item in response.json()["conversations"]]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_startup_guards(monkeypatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "mode", "hosted")

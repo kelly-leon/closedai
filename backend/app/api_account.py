@@ -4,7 +4,7 @@ from uuid import UUID
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy import delete, select
@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.api_documents import current_user
 from app.auth.factory import get_auth_provider
+from app.api_units import ensure_general
+from app.api_billing import usage as usage_payload
 from app.db.models import (
     AccountDeletionAudit,
     Chunk,
@@ -42,6 +44,44 @@ def authenticated_account_id(credentials: HTTPAuthorizationCredentials | None = 
     claims = provider.get_claims(credentials)
     subject = claims["sub"] if "sub" in claims else provider.get_user_id(credentials)
     return UUID(str(subject))
+
+
+@router.get("/bootstrap")
+def bootstrap(
+    response: Response,
+    unit_id: UUID | None = None,
+    user_id: UUID = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Return the initial signed-in shell state in one user-scoped response."""
+    response.headers["Cache-Control"] = "no-store"
+    ensure_general(db, user_id)
+    units = db.scalars(select(Unit).where(Unit.user_id == user_id).order_by(Unit.created_at, Unit.name)).all()
+
+    selected: Unit | None = None
+    if unit_id is not None:
+        selected = db.scalar(select(Unit).where(Unit.id == unit_id, Unit.user_id == user_id))
+    if selected is None:
+        selected = units[0] if units else None
+
+    conversations: list[dict[str, object]] = []
+    if selected is not None:
+        items = db.scalars(
+            select(Conversation)
+            .where(Conversation.user_id == user_id, Conversation.unit_id == selected.id)
+            .order_by(Conversation.created_at.desc())
+        ).all()
+        conversations = [{"id": str(item.id), "title": item.title, "created_at": item.created_at.isoformat()} for item in items]
+
+    user = db.get(User, user_id)
+    email = (user.email or "").strip().lower() if user else ""
+    admin_emails = {item.strip().lower() for item in get_settings().admin_emails}
+    return {
+        "units": [{"id": str(item.id), "name": item.name} for item in units],
+        "usage": usage_payload(user_id=user_id, db=db),
+        "conversations": conversations,
+        "admin": email in admin_emails,
+    }
 
 
 @router.get("/export")

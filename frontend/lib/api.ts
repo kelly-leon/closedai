@@ -1,5 +1,6 @@
 import { supabase, supabaseAuthEnabled } from "./supabase";
-import { sharedGet, invalidateShared } from "./sharedData";
+import { fetchQuery } from "./query";
+import { invalidateShared } from "./sharedData";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -18,6 +19,20 @@ let wakingRequests = 0;
 function setWaking(active: boolean) {
   wakingRequests = Math.max(0, wakingRequests + (active ? 1 : -1));
   window.dispatchEvent(new CustomEvent("closedai:server-waking", { detail: wakingRequests > 0 }));
+}
+
+export async function waitForBackend(timeoutMs = 90_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  setWaking(true);
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${API_URL}/health`, { cache: "no-store" });
+      if (response.ok) { setWaking(false); return true; }
+    } catch { /* Backend is still cold-starting. */ }
+    await delay(Math.min(3000, deadline - Date.now()));
+  }
+  setWaking(false);
+  return false;
 }
 
 function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
@@ -40,6 +55,7 @@ function isProtectedNonIdempotent(path: string, init: RequestInit) {
 }
 
 export interface ConversationSummary { id: string; title: string; created_at: string }
+export interface BootstrapData { units: Unit[]; usage: Usage; conversations: ConversationSummary[]; admin: boolean }
 export interface Source { filename: string; page: number | null; snippet: string }
 export interface Message { id: string; role: "user" | "assistant"; content: string | null; sources: Source[] | null; created_at: string }
 export interface DocumentItem { id: string; filename: string; status: "pending" | "processing" | "ready" | "failed"; error_message?: string | null }
@@ -87,17 +103,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       response = await fetch(`${API_URL}${path}`, { ...init, headers });
     } catch (error) {
       if (init.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      if (attempt === attempts - 1) {
-        if (waking) setWaking(false);
-        throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
+      if (!protectedPost && await waitForBackend()) {
+        continue;
       }
-      if (!waking) { waking = true; setWaking(true); }
-      await delay(RETRY_DELAYS[attempt], init.signal);
-      continue;
+      throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
     }
-    if (!WAKEABLE_STATUSES.has(response.status) || attempt === attempts - 1) break;
-    if (!waking) { waking = true; setWaking(true); }
-    await delay(RETRY_DELAYS[attempt], init.signal);
+    if (!WAKEABLE_STATUSES.has(response.status)) break;
+    if (protectedPost) break;
+    if (await waitForBackend()) continue;
   }
   if (waking) setWaking(false);
   if (!response) throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
@@ -145,7 +158,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   billingPackages: () => request<{ packages: BillingPackage[]; till_number: string; message: string }>("/billing/packages"),
-  paymentRequests: () => request<BillingRequest[]>("/billing/requests"),
+  paymentRequests: () => fetchQuery("billing:requests", () => request<BillingRequest[]>("/billing/requests")),
   submitPayment: (packageId: number, mpesaCode: string) => request<{ id: string; status: string }>("/billing/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package_id: packageId, mpesa_code: mpesaCode }) }),
   adminMe: () => request<{ is_admin: boolean; notifier_configured: boolean; mailer_configured?: boolean; mail_provider?: "smtp" | "apps_script" | "none" }>("/admin/me"),
   adminRequests: (status: string) => request<AdminRequest[]>(`/admin/requests?status=${encodeURIComponent(status)}`),
@@ -155,45 +168,32 @@ export const api = {
   resendPaymentEmail: (id: string) => request<{ status: string }>(`/admin/requests/${id}/resend-email`, { method: "POST" }),
   adminEmailTest: () => request<{ provider: string; ok: boolean; error: string; remaining?: number }>("/admin/email-test"),
   adminUsageSummary: () => request<{ last_7_days: UsageSummary; last_30_days: UsageSummary }>("/admin/usage-summary"),
-  units: () => sharedGet("units", () => request<Unit[]>("/units")),
+  units: () => fetchQuery("units", () => request<Unit[]>("/units")),
   createUnit: (name: string) => request<Unit>("/units", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
   renameUnit: (id: string, name: string) => request<Unit>(`/units/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
   deleteUnit: (id: string) => request<void>(`/units/${id}`, { method: "DELETE" } ),
-  usage: () => sharedGet("usage", () => request<Usage>("/me/usage")),
+  bootstrap: (unitId?: string) => request<BootstrapData>(`/me/bootstrap${unitId ? `?unit_id=${encodeURIComponent(unitId)}` : ""}`),
+  usage: () => fetchQuery("usage", () => request<Usage>("/me/usage")),
   deleteAccount: () => request<{ deleted: boolean }>("/me", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirm: "DELETE" }),
   }),
   redeem: (code: string) => request<Usage>("/redeem", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) }),
-  conversations: (unitId: string) => sharedGet(`conversations:${unitId}`, () => request<ConversationSummary[]>(`/conversations?unit_id=${encodeURIComponent(unitId)}`)),
-  conversation: (id: string, signal?: AbortSignal) => sharedGet(`conversation:${id}`, () => request<Message[]>(`/conversations/${id}`, { signal })),
+  conversations: (unitId: string) => fetchQuery(`conversations:${unitId}`, () => request<ConversationSummary[]>(`/conversations?unit_id=${encodeURIComponent(unitId)}`)),
+  conversation: (id: string, signal?: AbortSignal) => fetchQuery(`conversation:${id}`, () => request<Message[]>(`/conversations/${id}`, { signal })),
   deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: "DELETE" }),
   chatStream: async (message: string, conversationId: string | undefined, unitId: string, signal: AbortSignal) => {
     const headers = new Headers({ "Content-Type": "application/json" });
     Object.entries(await authHeaders()).forEach(([key, value]) => headers.set(key, String(value)));
     const body = JSON.stringify({ message, conversation_id: conversationId ?? null, unit_id: unitId });
-    let response: Response | undefined;
-    let waking = false;
-    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
-      try {
-        response = await fetch(`${API_URL}/chat`, { method: "POST", headers, signal, body });
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-        if (attempt === RETRY_DELAYS.length) {
-          if (waking) setWaking(false);
-          throw error;
-        }
-        if (!waking) { waking = true; setWaking(true); }
-        await delay(RETRY_DELAYS[attempt], signal);
-        continue;
-      }
-      if (!WAKEABLE_STATUSES.has(response.status) || attempt === RETRY_DELAYS.length) break;
-      if (!waking) { waking = true; setWaking(true); }
-      await delay(RETRY_DELAYS[attempt], signal);
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}/chat`, { method: "POST", headers, signal, body });
+    } catch (error) {
+      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+      throw new Error("We couldn't reach ClosedAI.");
     }
-    if (waking) setWaking(false);
-    if (!response) throw new Error("We couldn't reach ClosedAI.");
     if (response.status === 401 && supabaseAuthEnabled) {
       if (!supabase) return response;
       let refreshed: Awaited<ReturnType<typeof supabase.auth.refreshSession>>;
@@ -213,7 +213,7 @@ export const api = {
     }
     return response;
   },
-  documents: (unitId: string) => sharedGet(`documents:${unitId}`, () => request<DocumentItem[]>(`/documents?unit_id=${encodeURIComponent(unitId)}`)),
+  documents: (unitId: string) => fetchQuery(`documents:${unitId}`, () => request<DocumentItem[]>(`/documents?unit_id=${encodeURIComponent(unitId)}`)),
   uploadDocumentUrl: (file: File, unitId: string) => request<{ upload_url: string; token: string; storage_path: string }>("/documents/upload-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
