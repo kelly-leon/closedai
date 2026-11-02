@@ -3,6 +3,7 @@ import httpx
 
 from app import mailer
 from app.config import get_settings
+from app.config import Settings
 
 
 class SMTPSSLStub:
@@ -99,3 +100,51 @@ def test_apps_script_timeout(monkeypatch):
     sent, error = mailer.send_email_result("user@example.com", "Subject", "Text")
     assert sent is False
     assert error == "Apps Script request timed out"
+
+
+def test_apps_script_status_missing_combinations(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mail_provider", "apps_script")
+    monkeypatch.setattr(settings, "apps_script_url", "")
+    monkeypatch.setattr(settings, "mail_secret", "")
+    assert mailer.mailer_status()["missing"] == ["APPS_SCRIPT_URL", "MAIL_SECRET"]
+
+    monkeypatch.setattr(settings, "apps_script_url", "https://script.google.com/macros/s/test/exec")
+    assert mailer.mailer_status()["missing"] == ["MAIL_SECRET"]
+
+    monkeypatch.setattr(settings, "apps_script_url", "")
+    monkeypatch.setattr(settings, "mail_secret", "secret")
+    assert mailer.mailer_status()["missing"] == ["APPS_SCRIPT_URL"]
+
+
+def test_mail_secret_alias_and_precedence(monkeypatch):
+    monkeypatch.setenv("MAIL_SECRET", "preferred-secret")
+    monkeypatch.setenv("APPS_SCRIPT_SECRET", "alias-secret")
+    settings = Settings(_env_file=None)
+    assert settings.mail_secret == "preferred-secret"
+
+    monkeypatch.delenv("MAIL_SECRET")
+    settings = Settings(_env_file=None)
+    assert settings.mail_secret == "alias-secret"
+
+
+def test_mail_settings_are_trimmed(monkeypatch):
+    monkeypatch.setenv("MAIL_PROVIDER", ' "apps_script" ')
+    monkeypatch.setenv("APPS_SCRIPT_URL", "  'https://script.google.com/macros/s/test/exec'  ")
+    monkeypatch.setenv("MAIL_SECRET", ' " top-secret " ')
+    settings = Settings(_env_file=None)
+    assert settings.mail_provider == "apps_script"
+    assert settings.apps_script_url == "https://script.google.com/macros/s/test/exec"
+    assert settings.mail_secret == "top-secret"
+
+
+def test_mailer_status_does_not_leak_values(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mail_provider", "apps_script")
+    monkeypatch.setattr(settings, "apps_script_url", "https://example.invalid/private/token")
+    monkeypatch.setattr(settings, "mail_secret", "private-secret")
+    status = mailer.mailer_status()
+    rendered = repr(status)
+    assert "private-secret" not in rendered
+    assert "private/token" not in rendered
+    assert status["hints"]

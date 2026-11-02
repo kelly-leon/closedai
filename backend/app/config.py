@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[2] / ".env",
         extra="ignore",
+        populate_by_name=True,
     )
 
     mode: Literal["selfhosted", "hosted"] = "selfhosted"
@@ -62,7 +63,7 @@ class Settings(BaseSettings):
     admin_notify_email: str = ""
     mail_provider: Literal["smtp", "apps_script", "none"] = "none"
     apps_script_url: str = ""
-    mail_secret: str = ""
+    mail_secret: str = Field(default="", validation_alias=AliasChoices("MAIL_SECRET", "APPS_SCRIPT_SECRET"))
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 465
     smtp_security: Literal["ssl", "starttls"] = "ssl"
@@ -110,6 +111,21 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip().lower().lstrip(".") for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("mail_provider", "apps_script_url", "mail_secret", mode="before")
+    @classmethod
+    def clean_mail_setting(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        while len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"\"", "'"}:
+            cleaned = cleaned[1:-1].strip()
+        return cleaned
+
+    @field_validator("mail_provider", mode="after")
+    @classmethod
+    def normalize_mail_provider(cls, value: str) -> str:
+        return value.lower()
 
 
 @lru_cache

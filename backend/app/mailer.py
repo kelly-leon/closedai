@@ -23,8 +23,38 @@ def mailer_configured() -> bool:
     return False
 
 
+def mailer_status() -> dict[str, object]:
+    settings = get_settings()
+    provider = settings.mail_provider
+    missing: list[str] = []
+    hints: list[str] = []
+    enabled = False
+
+    if provider == "apps_script":
+        if not settings.apps_script_url:
+            missing.append("APPS_SCRIPT_URL")
+        if not settings.mail_secret:
+            missing.append("MAIL_SECRET")
+        if settings.apps_script_url:
+            if not settings.apps_script_url.startswith("https://script.google.com/"):
+                hints.append("APPS_SCRIPT_URL should start with https://script.google.com/")
+            if not settings.apps_script_url.endswith("/exec"):
+                hints.append("APPS_SCRIPT_URL should end with /exec")
+        enabled = not missing
+    else:
+        enabled = mailer_configured()
+
+    return {"provider": provider, "enabled": enabled, "missing": missing, "hints": hints}
+
+
 def mailer_startup_name() -> str:
     settings = get_settings()
+    status = mailer_status()
+    if settings.mail_provider == "apps_script":
+        if status["enabled"]:
+            return "mailer: apps_script enabled"
+        missing = ", ".join(status["missing"])
+        return f"mailer: apps_script DISABLED, missing: {missing}" if missing else "mailer: apps_script DISABLED"
     return f"mailer: {settings.mail_provider}" if mailer_configured() else "mailer: disabled"
 
 

@@ -160,7 +160,7 @@ export const api = {
   billingPackages: () => request<{ packages: BillingPackage[]; till_number: string; message: string }>("/billing/packages"),
   paymentRequests: () => fetchQuery("billing:requests", () => request<BillingRequest[]>("/billing/requests")),
   submitPayment: (packageId: number, mpesaCode: string) => request<{ id: string; status: string }>("/billing/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package_id: packageId, mpesa_code: mpesaCode }) }),
-  adminMe: () => request<{ is_admin: boolean; notifier_configured: boolean; mailer_configured?: boolean; mail_provider?: "smtp" | "apps_script" | "none" }>("/admin/me"),
+  adminMe: () => request<{ is_admin: boolean; notifier_configured: boolean; mailer_configured?: boolean; mail_provider?: "smtp" | "apps_script" | "none"; mailer_status?: { provider: string; enabled: boolean; missing: string[]; hints: string[] } }>("/admin/me"),
   adminRequests: (status: string) => request<AdminRequest[]>(`/admin/requests?status=${encodeURIComponent(status)}`),
   approvePayment: (id: string) => request<{ status: string }>(`/admin/requests/${id}/approve`, { method: "POST" }),
   rejectPayment: (id: string, reason: string) => request<{ status: string }>(`/admin/requests/${id}/reject`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) }),

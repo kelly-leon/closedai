@@ -22,6 +22,7 @@ export default function AdminPage() {
   const [notifierConfigured, setNotifierConfigured] = useState(true);
   const [mailerConfigured, setMailerConfigured] = useState(true);
   const [mailProvider, setMailProvider] = useState<"smtp" | "apps_script" | "none">("smtp");
+  const [mailerStatus, setMailerStatus] = useState<{ provider: string; enabled: boolean; missing: string[]; hints: string[] } | null>(null);
   const [notifyUser, setNotifyUser] = useState(true);
   const [emailTest, setEmailTest] = useState<{ provider: string; ok: boolean; error: string; remaining?: number } | null>(null);
 
@@ -36,7 +37,7 @@ export default function AdminPage() {
     }
   }
   useEffect(() => {
-    void api.adminMe().then(async status => { setNotifierConfigured(status.notifier_configured); setMailerConfigured(status.mailer_configured !== false); setMailProvider(status.mail_provider ?? "smtp"); setAllowed(true); await refresh(); void api.adminUsageSummary().then(setSummary).catch(() => undefined); }).catch(() => router.replace("/"));
+    void api.adminMe().then(async status => { setNotifierConfigured(status.notifier_configured); setMailerConfigured(status.mailer_configured !== false); setMailProvider(status.mail_provider ?? "smtp"); setMailerStatus(status.mailer_status ?? null); setAllowed(true); await refresh(); void api.adminUsageSummary().then(setSummary).catch(() => undefined); }).catch(() => router.replace("/"));
   }, [router]);
   useEffect(() => {
     if (!allowed) return;
@@ -73,10 +74,10 @@ export default function AdminPage() {
     <div className="app-page-inner mx-auto max-w-6xl">
       <h1 className="text-3xl font-semibold">Admin dashboard</h1>
       {!notifierConfigured && <p role="status" className="mt-4 text-sm text-amber-200">Email alerts are off; check Pending regularly</p>}
-      {!mailerConfigured && <p role="status" className="mt-2 rounded border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-200">User email is disabled; configure Gmail SMTP to send user notifications.</p>}
-      {mailProvider === "none" && <p role="status" className="mt-2 rounded border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-200">User email is off because MAIL_PROVIDER=none.</p>}
+      {!mailerConfigured && <p role="status" className="mt-2 rounded border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-200">User emails are off. Missing: {(mailerStatus?.missing?.join(", ") || (mailProvider === "none" ? "MAIL_PROVIDER" : "mailer configuration"))}</p>}
       <section className="mt-4 flex flex-wrap items-center gap-3">
         <button disabled={Boolean(busy)} onClick={() => void sendEmailTest()} className="rounded border border-sky-300 px-3 py-2 text-sm">Send test email</button>
+        {mailerStatus && <span className={`text-sm ${mailerStatus.enabled ? "text-emerald-200" : "text-amber-200"}`}>{mailerStatus.enabled ? "User emails on" : `User emails off · Missing: ${mailerStatus.missing.join(", ") || "mailer configuration"}`}</span>}
         {emailTest && <p role="status" className={`text-sm ${emailTest.ok ? "text-emerald-200" : "text-red-200"}`}>
           {emailTest.ok ? `Sent via ${emailTest.provider}${typeof emailTest.remaining === "number" ? ` · ${emailTest.remaining} quota remaining` : ""}` : `${emailTest.error || "Test email failed"}${emailTest.provider ? ` · ${emailTest.provider}` : ""}`}
         </p>}

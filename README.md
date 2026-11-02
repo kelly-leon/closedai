@@ -4,8 +4,6 @@
 
 Hosted token billing uses the following environment variables: `TOKENS_PER_MESSAGE`, `TRIAL_TOKENS_PER_WEEK`, `TRIAL_DOCUMENTS`, `PAID_DOCUMENTS`, `PREMIUM_DOCUMENTS`, `PREMIUM_DAILY_CAP`, `MPESA_TILL_NUMBER`, `ADMIN_EMAILS`, `ADMIN_NOTIFY_EMAIL`, `RESEND_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TIMEZONE`, and `FRONTEND_URL`. Never put real credentials in this repository.
 
-User-facing Gmail SMTP uses `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, and `SMTP_FROM_NAME`. If `SMTP_USER` or `SMTP_PASSWORD` is empty, user email delivery is disabled. `SMTP_SECURITY` accepts `ssl` or `starttls`; keep credentials and real addresses in the local `.env`, not in this repository.
-
 On Render Free, use the HTTPS Google Apps Script provider instead of SMTP:
 `MAIL_PROVIDER=apps_script`, `APPS_SCRIPT_URL=https://script.google.com/.../exec`, and
 `MAIL_SECRET=...`. Deploy [docs/apps-script-mailer.gs](docs/apps-script-mailer.gs) as a Google

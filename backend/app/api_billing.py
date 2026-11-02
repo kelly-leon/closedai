@@ -16,7 +16,7 @@ from app.auth.factory import get_auth_provider
 from app.config import get_settings
 from app.db.models import AuditLog, Package, PaymentRequest, RedeemCode, User, UserPlan, UsageEvent
 from app.db.session import get_db
-from app.mailer import mailer_configured, send_email, send_email_detail, send_email_result
+from app.mailer import mailer_configured, mailer_status, send_email, send_email_detail, send_email_result
 from app.notify import configured_providers, notify_payment, send_notification
 from app.rate_limit import rate_limit
 from app.usage import apply_daily_reset, apply_weekly_reset, code_hash, documents_used, ensure_plan, normalize_code, trial_remaining, valid_admin_key
@@ -77,7 +77,8 @@ def admin_claims(credentials: HTTPAuthorizationCredentials | None = Depends(bear
 @router.get("/admin/me")
 def admin_me(claims=Depends(admin_claims)) -> dict[str, object]:
     settings = get_settings()
-    return {"is_admin": True, "notifier_configured": bool(configured_providers()), "mailer_configured": mailer_configured(), "mail_provider": settings.mail_provider}
+    status = mailer_status()
+    return {"is_admin": True, "notifier_configured": bool(configured_providers()), "mailer_configured": mailer_configured(), "mail_provider": settings.mail_provider, "mailer_status": status}
 
 
 @router.get("/admin/notify-test")

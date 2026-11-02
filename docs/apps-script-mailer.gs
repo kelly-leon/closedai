@@ -1,11 +1,11 @@
 /*
- * ClosedAI Gmail mailer
+ * ClosedAI Apps Script mailer
  *
  * Setup:
  * 1. Open https://script.google.com and create an Apps Script project.
  * 2. Paste this file, then deploy as Web app (Execute as: Me, access: Anyone).
  * 3. In Project Settings > Script properties, add MAIL_SECRET. Set the same
- *    value on Render as APPS_SCRIPT_SECRET.
+ *    value on Render as MAIL_SECRET.
  * 4. Set ClosedAI MAIL_PROVIDER=apps_script and APPS_SCRIPT_URL to the Web app URL.
  * 5. Approve Gmail authorization when Google prompts during deployment/testing.
  * 6. After changing this script, publish a new version under Deploy > Manage deployments.
