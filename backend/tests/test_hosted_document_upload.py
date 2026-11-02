@@ -7,13 +7,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 import app.api_documents as documents_api
-from app.db.models import Base, Document, Unit, User, UserPlan
+from app.db.models import Base, Chunk, Document, Unit, User, UserPlan
 
 
 @pytest.fixture
 def hosted_db(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[User.__table__, Unit.__table__, Document.__table__, UserPlan.__table__])
+    Base.metadata.create_all(engine, tables=[User.__table__, Unit.__table__, Document.__table__, Chunk.__table__, UserPlan.__table__])
     monkeypatch.setattr(documents_api.get_settings(), "mode", "hosted")
     monkeypatch.setattr(documents_api.get_settings(), "storage_provider", "supabase")
     with Session(engine) as db:
@@ -119,3 +119,43 @@ def test_register_rejects_mismatched_mime_type(hosted_db, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(documents_api.register_document(payload, BackgroundTasks(), user_id, hosted_db))
     assert exc.value.status_code == 422
+
+
+def test_delete_document_enforces_ownership(hosted_db):
+    owner, unit_id = _unit(hosted_db)
+    document = Document(id=uuid4(), user_id=owner, unit_id=unit_id, filename="owned.txt", mime_type="text/plain", size_bytes=1, storage_path=f"{owner}/owned.txt", source_hash="hash", status="ready")
+    hosted_db.add(document)
+    hosted_db.commit()
+    with pytest.raises(HTTPException) as exc:
+        documents_api.delete_document(document.id, uuid4(), hosted_db)
+    assert exc.value.status_code == 404
+
+
+def test_delete_document_storage_failure_still_removes_rows(hosted_db, monkeypatch):
+    owner, unit_id = _unit(hosted_db)
+    document = Document(id=uuid4(), user_id=owner, unit_id=unit_id, filename="owned.txt", mime_type="text/plain", size_bytes=1, storage_path=f"{owner}/owned.txt", source_hash="hash", status="ready")
+    hosted_db.add(document)
+    hosted_db.commit()
+
+    class FailingProvider:
+        def delete(self, key):
+            raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(documents_api, "get_storage_provider", lambda: FailingProvider())
+    documents_api.delete_document(document.id, owner, hosted_db)
+    assert hosted_db.get(Document, document.id) is None
+
+
+def test_delete_document_retry_is_idempotent(hosted_db, monkeypatch):
+    owner, unit_id = _unit(hosted_db)
+    document = Document(id=uuid4(), user_id=owner, unit_id=unit_id, filename="owned.txt", mime_type="text/plain", size_bytes=1, storage_path=f"{owner}/owned.txt", source_hash="hash", status="ready")
+    hosted_db.add(document)
+    hosted_db.commit()
+
+    class DeletingProvider:
+        def delete(self, key):
+            pass
+
+    monkeypatch.setattr(documents_api, "get_storage_provider", lambda: DeletingProvider())
+    documents_api.delete_document(document.id, owner, hosted_db)
+    documents_api.delete_document(document.id, owner, hosted_db)

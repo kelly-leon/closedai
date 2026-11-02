@@ -57,6 +57,8 @@ class SupabaseStorageProvider(StorageProvider):
             headers=self.headers,
             json={"prefixes": [key]},
         )
+        if response.status_code == 404:
+            raise FileNotFoundError(key)
         response.raise_for_status()
 
     def create_signed_upload_url(self, key: str) -> dict[str, str]:

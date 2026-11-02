@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from uuid import UUID, uuid4
 import hashlib
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -18,10 +19,14 @@ from app.db.models import Chunk, Document, Unit, User
 from app.db.session import get_db
 from app.ingest.pipeline import ingest_document
 from app.storage.factory import get_storage_provider
+
+logger = logging.getLogger(__name__)
 from app.storage.supabase import StorageAuthError, StorageUnavailableError
 from app.usage import check_limit
 from app.rate_limit import rate_limit
 from app.ingest.parse import verify_file_signature
+from app.ingest.parse import IMAGE_EXTENSIONS, prepare_image
+from app.usage import check_image_affordability
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 bearer = HTTPBearer(auto_error=False)
@@ -118,6 +123,12 @@ async def create_document_upload_url(payload: DocumentUploadRequest, user_id: UU
     if db.scalar(select(Unit).where(Unit.id == payload.unit_id, Unit.user_id == user_id)) is None:
         raise HTTPException(status_code=404, detail="Unit not found")
     _validate_file(payload.filename, payload.size_bytes)
+    extension = Path(payload.filename).suffix.lower().lstrip(".")
+    if extension in IMAGE_EXTENSIONS:
+        settings = get_settings()
+        if payload.size_bytes > settings.image_max_mb * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"Image exceeds the {settings.image_max_mb} MB limit")
+        check_image_affordability(db, user_id)
     rate_limit(f"uploads:{user_id}", 20, 3600, "You've uploaded too many files recently. Please try again later.")
     check_limit(db, user_id, "documents")
     rate_limit(f"uploads:{user_id}", 20, 3600, "You've uploaded too many files recently. Please try again later.")
@@ -140,6 +151,11 @@ async def upload_document(background_tasks: BackgroundTasks, unit_id: UUID, file
     check_limit(db, user_id, "documents")
     rate_limit(f"uploads:{user_id}", 20, 3600, "You've uploaded too many files recently. Please try again later.")
     content = await file.read()
+    extension = Path(file.filename or "").suffix.lower().lstrip(".")
+    if extension in IMAGE_EXTENSIONS:
+        if len(content) > settings.image_max_mb * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"Image exceeds the {settings.image_max_mb} MB limit")
+        content = prepare_image(content, file.filename or "", settings.image_max_mb * 1024 * 1024)
     _validate_file(file.filename or "", len(content))
     try:
         verify_file_signature(file.filename or "", content)
@@ -189,13 +205,23 @@ async def register_document(payload: DocumentRegistration, background_tasks: Bac
     try:
         read = getattr(provider, "read", None)
         if read is not None:
-            verify_file_signature(payload.filename, read(payload.storage_path))
+            uploaded = read(payload.storage_path)
+            verify_file_signature(payload.filename, uploaded)
+            extension = Path(payload.filename).suffix.lower().lstrip(".")
+            if extension in IMAGE_EXTENSIONS:
+                uploaded = prepare_image(uploaded, payload.filename, get_settings().image_max_mb * 1024 * 1024)
+                if hasattr(provider, "save"):
+                    provider.save(payload.storage_path, uploaded)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     check_limit(db, user_id, "documents")
+    if Path(payload.filename).suffix.lower().lstrip(".") in IMAGE_EXTENSIONS:
+        check_image_affordability(db, user_id)
     document_id = uuid4()
-    source_hash = hashlib.sha256(read(payload.storage_path)).hexdigest() if read is not None else None
-    document = Document(id=document_id, user_id=user_id, unit_id=payload.unit_id, filename=_sanitize_filename(payload.filename), mime_type=real_type, size_bytes=real_size, storage_path=payload.storage_path, source_hash=source_hash, status="pending")
+    stored = read(payload.storage_path) if read is not None else None
+    source_hash = hashlib.sha256(stored).hexdigest() if stored is not None else None
+    document_size = len(stored) if stored is not None else real_size
+    document = Document(id=document_id, user_id=user_id, unit_id=payload.unit_id, filename=_sanitize_filename(payload.filename), mime_type=real_type, size_bytes=document_size, storage_path=payload.storage_path, source_hash=source_hash, status="pending")
     db.add(document)
     db.commit()
     background_tasks.add_task(ingest_document, document_id, user_id)
@@ -240,8 +266,21 @@ def delete_document(document_id: UUID, user_id: UUID = Depends(current_user), db
     """Delete stored content, chunks, and the owned document row."""
     document = db.scalar(select(Document).where(Document.id == document_id, Document.user_id == user_id))
     if document is None:
+        existing = db.get(Document, document_id)
+        if existing is None:
+            return
         raise HTTPException(status_code=404, detail="Document not found")
     db.execute(delete(Chunk).where(Chunk.document_id == document_id, Chunk.user_id == user_id))
-    get_storage_provider().delete(document.storage_path)
     db.delete(document)
     db.commit()
+    try:
+        get_storage_provider().delete(document.storage_path)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logger.warning(
+            "document storage deletion failed; orphan may require cleanup path=%s document_id=%s error=%s",
+            document.storage_path,
+            document_id,
+            type(exc).__name__,
+        )

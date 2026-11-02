@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://closedai:closedai@localhost:5432/closedai"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-5-20250929"
+    vision_model: str = ""
     top_k: int = 6
     similarity_threshold: float = 0.2
     max_tool_rounds: int = 6
@@ -37,7 +38,9 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     supabase_bucket: str = "documents"
     max_file_size_mb: int = 50
-    allowed_extensions: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["pdf", "docx", "txt", "md"])
+    image_max_mb: int = 5
+    image_ingest_tokens: int = 5
+    allowed_extensions: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["pdf", "docx", "txt", "md", "jpg", "jpeg", "png", "webp"])
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     voyage_api_key: str = ""

@@ -146,6 +146,16 @@ def check_limit(db: Session, user_id: UUID, limit: str) -> None:
     if used >= quota:
         raise HTTPException(status_code=402, detail={"code": "limit_reached", "limit": "documents", "message": "You reached your document limit. Open Upgrade to continue."})
 
+def check_image_affordability(db: Session, user_id: UUID) -> None:
+    if get_settings().mode != "hosted":
+        return
+    plan = apply_weekly_reset(db, ensure_plan(db, user_id))
+    required = get_settings().image_ingest_tokens
+    if plan.premium_until and plan.premium_until > datetime.utcnow():
+        return
+    if trial_remaining(plan) + plan.token_balance < required:
+        raise HTTPException(status_code=402, detail=limit_payload("tokens", "You don't have enough tokens to read this image. Open Upgrade to add tokens."))
+
 
 def count_message(db: Session, user_id: UUID) -> bool:
     return charge_tokens(db, user_id)

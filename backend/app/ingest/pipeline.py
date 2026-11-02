@@ -4,6 +4,7 @@ import hashlib
 import logging
 import threading
 import time
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -15,7 +16,11 @@ from app.embeddings.factory import get_embedding_provider
 from app.embeddings.voyage import VoyageConfigurationError, VoyageRateLimitError
 from app.ingest.chunk import chunk_pages
 from app.ingest.parse import parse_document
+from app.ingest.parse import IMAGE_EXTENSIONS, prepare_image
+from app.ingest.vision import transcribe_image
 from app.storage.factory import get_storage_provider
+from app.db.models import UsageEvent
+from app.usage import charge_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +63,16 @@ def ingest_document(document_id: UUID, user_id: UUID) -> None:
                 db.execute(delete(Chunk).where(Chunk.document_id == document_id, Chunk.user_id == user_id))
             document.source_hash = source_hash
 
-            pages = parse_document(document.filename, content)
+            vision_usage = (0, 0)
+            if Path(document.filename).suffix.lower().lstrip(".") in IMAGE_EXTENSIONS:
+                settings = get_settings()
+                content = prepare_image(content, document.filename, settings.image_max_mb * 1024 * 1024)
+                suffix = Path(document.filename).suffix.lower().lstrip(".")
+                mime = "image/jpeg" if suffix in {"jpg", "jpeg"} else f"image/{suffix}"
+                text, input_tokens, output_tokens = transcribe_image(content, mime)
+                pages = [(None, text)]
+            else:
+                pages = parse_document(document.filename, content)
             chunks = chunk_pages(pages)
             if not chunks:
                 raise ValueError("Document produced no text chunks")
@@ -85,6 +99,17 @@ def ingest_document(document_id: UUID, user_id: UUID) -> None:
                 document.error_message = f"Embedding {document.chunks_done} of {len(chunks)} sections"
                 db.commit()
 
+            if Path(document.filename).suffix.lower().lstrip(".") in IMAGE_EXTENSIONS:
+                if get_settings().mode == "hosted":
+                    charged = charge_tokens(db, user_id, get_settings().image_ingest_tokens)
+                    if not charged:
+                        raise RuntimeError("Not enough image tokens")
+                db.add(UsageEvent(
+                    user_id=user_id, kind="image", model=(get_settings().vision_model or get_settings().anthropic_model),
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    tokens_charged=get_settings().image_ingest_tokens if get_settings().mode == "hosted" else 0,
+                ))
+                db.commit()
             document.status = "ready"
             document.error_message = None
             document.chunks_done = len(chunks)

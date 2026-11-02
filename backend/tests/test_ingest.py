@@ -1,5 +1,6 @@
 """Small ingestion unit tests."""
 
+from io import BytesIO
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -12,9 +13,39 @@ import app.main as main_module
 from app.api_documents import retry_document
 from app.db.models import Base, Document, Unit, User
 from app.ingest.chunk import chunk_text
-from app.ingest.parse import SCANNED_PDF_MESSAGE, parse_document
+from app.ingest.parse import SCANNED_PDF_MESSAGE, parse_document, prepare_image, verify_file_signature
 from app.db.models import Chunk
 from app.ingest.pipeline import ingest_document
+
+
+def _png_bytes(size=(20, 20)):
+    from PIL import Image
+    output = BytesIO()
+    Image.new("RGBA", size, (120, 30, 200, 255)).save(output, format="PNG")
+    return output.getvalue()
+
+
+def test_image_signature_and_exif_removal():
+    from PIL import Image
+    source = BytesIO()
+    image = Image.new("RGB", (300, 200), "red")
+    exif = Image.Exif()
+    exif[36867] = "2026:11:02 08:00:00"
+    image.save(source, format="JPEG", exif=exif)
+    clean = prepare_image(source.getvalue(), "photo.jpg", 5 * 1024 * 1024)
+    assert verify_file_signature("photo.jpg", clean) == "jpg"
+    with Image.open(BytesIO(clean)) as result:
+        assert result.getexif() == {}
+
+
+def test_non_image_with_image_extension_is_rejected():
+    with pytest.raises(ValueError, match="not a valid image"):
+        prepare_image(b"plain text", "photo.png", 5 * 1024 * 1024)
+
+
+def test_image_payload_over_limit_is_rejected():
+    with pytest.raises(ValueError, match="exceeds"):
+        prepare_image(_png_bytes(), "photo.png", 1)
 
 
 def test_chunk_text_overlaps() -> None:

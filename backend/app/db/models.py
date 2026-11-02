@@ -153,6 +153,7 @@ class UsageEvent(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     conversation_id: Mapped[UUID | None] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="chat")
     model: Mapped[str] = mapped_column(String, nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
