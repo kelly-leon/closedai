@@ -20,7 +20,7 @@ function MarkdownInline({ children, sources }: { children: ReactNode; sources: S
 }
 
 export function MessageContent({ content, role, sources }: { content: string | null | undefined; role: "user" | "assistant"; sources: Source[] | null }) {
-  const text = safeMessageText(content);
+  const text = safeMessageText(content).replace(/[ \t]+\n/g, "\n").replace(/\n(?:[ \t]*\n)+/g, "\n\n");
   if (role === "user") {
     const parsed = splitQuotedMessage(text);
     return <div className="text-sm leading-relaxed">
@@ -31,7 +31,7 @@ export function MessageContent({ content, role, sources }: { content: string | n
 
   const inline = ({ children }: ComponentPropsWithoutRef<"p">) => <p><MarkdownInline sources={sources}>{children}</MarkdownInline></p>;
   const listItem = ({ children }: ComponentPropsWithoutRef<"li">) => <li><MarkdownInline sources={sources}>{children}</MarkdownInline></li>;
-  return <div className="prose prose-sm prose-slate dark:prose-invert max-w-none leading-7 whitespace-pre-wrap">
+  return <div className="prose prose-sm prose-slate dark:prose-invert max-w-none whitespace-pre-wrap">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{

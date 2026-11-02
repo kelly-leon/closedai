@@ -28,6 +28,23 @@
 .app-user-message { margin-bottom: 2px; padding: 14px 16px; border-radius: 18px 18px 4px 18px; background: #242129; color: var(--closedai-cream); }
 .app-assistant-message { padding-top: 2px; color: var(--closedai-cream); }
 .app-assistant-message .prose { color: inherit; }
+.app-chat .app-assistant-message .prose {
+  line-height: 1.6;
+}
+.app-chat .app-assistant-message .prose p {
+  margin-top: .75em;
+  margin-bottom: .75em;
+}
+.app-chat .app-assistant-message .prose li {
+  margin-top: .25em;
+  margin-bottom: .25em;
+}
+.app-chat .app-assistant-message .prose p:first-child,
+.app-chat .app-assistant-message .prose h1:first-child,
+.app-chat .app-assistant-message .prose h2:first-child,
+.app-chat .app-assistant-message .prose h3:first-child {
+  margin-top: 0;
+}
 .app-composer { max-width: 768px; margin: 0 auto; padding-bottom: 1px; border-bottom: 1px solid rgba(245,240,247,.36); }
 .app-composer:focus-within { border-bottom-color: var(--closedai-lime); box-shadow: 0 1px 0 var(--closedai-lime); }
 .app-composer textarea { color: var(--closedai-cream); }

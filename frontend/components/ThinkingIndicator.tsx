@@ -1,26 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+const { THINKING_WORDS, chooseDifferentWord } = require("../lib/thinkingWords.js") as {
+  THINKING_WORDS: string[];
+  chooseDifferentWord: (words: string[], current: string, random?: () => number) => string;
+};
 
-const THINKING_WORDS = [
-  "Triangulating",
-  "Mulling",
-  "Crawling",
-  "Digging",
-  "Cross-referencing",
-  "Sifting",
-  "Connecting dots",
-  "Ruminating",
-  "Scouring",
-  "Untangling",
-  "Decoding",
-  "Cogitating",
-  "Foraging",
-  "Piecing together",
-  "Surfacing",
-];
-
-export function ThinkingIndicator({ status }: { status?: string }) {
+export function ThinkingIndicator({ phase }: { phase?: string }) {
   const [word, setWord] = useState(THINKING_WORDS[0]);
   const [visible, setVisible] = useState(true);
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -41,13 +27,11 @@ export function ThinkingIndicator({ status }: { status?: string }) {
       setVisible(false);
       fadeTimeoutRef.current = window.setTimeout(() => {
         let next = wordRef.current;
-        while (next === wordRef.current) {
-          next = THINKING_WORDS[Math.floor(Math.random() * THINKING_WORDS.length)];
-        }
+        next = chooseDifferentWord(THINKING_WORDS, wordRef.current);
         wordRef.current = next;
         setWord(next);
         setVisible(true);
-      }, 180);
+      }, 200);
     }, 2000);
     return () => {
       window.clearInterval(interval);
@@ -59,22 +43,25 @@ export function ThinkingIndicator({ status }: { status?: string }) {
     <div
       aria-live="polite"
       aria-label="Assistant is working"
-      className="flex items-center gap-2 text-sm text-[#a9b3c7]"
+      className="flex flex-col items-start gap-1 text-sm text-[#a9b3c7]"
     >
       <span className="sr-only">Assistant is working</span>
-      <span
-        aria-hidden="true"
-        className={`transition-opacity duration-200 ${visible ? "opacity-100" : "opacity-0"}`}
-      >
-        {status ?? word}
-      </span>
-      {!reducedMotion && (
-        <span aria-hidden="true" className="inline-flex gap-0.5" role="presentation">
-          <span className="animate-pulse">.</span>
-          <span className="animate-pulse [animation-delay:150ms]">.</span>
-          <span className="animate-pulse [animation-delay:300ms]">.</span>
+      <span className="flex items-center gap-2">
+        <span
+          aria-hidden="true"
+          className={`transition-opacity duration-200 ${visible ? "opacity-100" : "opacity-0"}`}
+        >
+          {word}
         </span>
-      )}
+        {!reducedMotion && (
+          <span aria-hidden="true" className="inline-flex gap-0.5" role="presentation">
+            <span className="animate-pulse">.</span>
+            <span className="animate-pulse [animation-delay:150ms]">.</span>
+            <span className="animate-pulse [animation-delay:300ms]">.</span>
+          </span>
+        )}
+      </span>
+      {phase === "searching" && <span className="text-xs text-[#7f899d]">Searching your notes</span>}
     </div>
   );
 }

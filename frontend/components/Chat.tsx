@@ -5,20 +5,17 @@ import { usePathname, useRouter } from "next/navigation";
 import { api, Source } from "../lib/api";
 import { SourceList } from "./SourceList";
 import { ThinkingIndicator } from "./ThinkingIndicator";
-import dynamic from "next/dynamic";
-import { tokenizeWords } from "../lib/messageText";
-import type { CrawlerStatus } from "../lib/crawler";
 import { MessageContent } from "./MessageContent";
 import * as Sentry from "@sentry/nextjs";
-
-const CrawlerCanvas = dynamic(() => import("./crawler/CrawlerCanvas").then(module => module.CrawlerCanvas), { ssr: false });
+import { SoundToggle } from "./SoundToggle";
+import { chatSound, SoundTokenBatch } from "../lib/sound";
 
 interface DisplayMessage { id: string; role: "user" | "assistant"; content: string | null; sources: Source[] | null }
 interface SelectionButton { text: string; left: number; top: number }
 
 const MessageItem = memo(function MessageItem({ message, streaming }: { message: DisplayMessage; streaming: boolean }) {
   return <article className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-    <div className={`app-message max-w-[85%] ${message.role === "user" ? "app-user-message" : "app-assistant-message"}`}>
+    <div className={`app-message ${message.role === "user" ? "app-user-message max-w-[85%]" : "app-assistant-message w-full"}`}>
       <div data-assistant-message={message.role === "assistant" ? true : undefined}>
         <MessageContent content={message.content} role={message.role} sources={message.sources} />
       </div>
@@ -73,13 +70,17 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   const [quote, setQuote] = useState<string | null>(null);
   const [selectionButton, setSelectionButton] = useState<SelectionButton | null>(null);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
-  const [workingStatus, setWorkingStatus] = useState<string | undefined>(undefined);
-  const [searchWords, setSearchWords] = useState<string[]>([]);
-  const [crawlerVisible, setCrawlerVisible] = useState(false);
-  const [crawlerStatus, setCrawlerStatus] = useState<CrawlerStatus | undefined>();
-  const [crawlerDocuments, setCrawlerDocuments] = useState<string[]>([]);
   const streamBuffer = useRef("");
   const streamFrame = useRef<number | null>(null);
+  const [workingPhase, setWorkingPhase] = useState<string | undefined>();
+
+  useEffect(() => {
+    chatSound.stop();
+  }, [pathname]);
+
+  useEffect(() => () => {
+    chatSound.unmount();
+  }, []);
 
   useEffect(() => {
     function nodeIsInsideAssistant(node: Node | null): boolean {
@@ -143,7 +144,8 @@ export function Chat({ conversationId }: { conversationId?: string }) {
     const reset = () => {
       controller.current?.abort();
       controller.current = null;
-      setMessages([]); setInput(""); setQuote(null); setSelectionButton(null); setWorkingStatus(undefined); setActiveConversation(undefined); setStreaming(false); setThinking(false); setError(null);
+      chatSound.stop();
+      setMessages([]); setInput(""); setQuote(null); setSelectionButton(null); setActiveConversation(undefined); setStreaming(false); setThinking(false); setWorkingPhase(undefined); setError(null);
       window.setTimeout(() => inputRef.current?.focus(), 50);
     };
     window.addEventListener("closedai:new-chat", reset);
@@ -163,23 +165,11 @@ export function Chat({ conversationId }: { conversationId?: string }) {
     const override = typeof event === "string" ? event : null;
     const question = override?.trim() || input.trim() || (quote ? "Explain this" : "");
     if (!question || streaming) return;
+    void chatSound.gesture();
     const message = override || (quote ? `> ${quote.slice(0, 1000).replace(/\n/g, "\n> ")}\n\n${question}` : question);
     setLastMessage(message);
     setInput(""); setQuote(null); setSelectionButton(null); setError(null); setStreaming(true);
     setThinking(true);
-    setCrawlerVisible(true);
-    void (async () => {
-      try {
-        const unitId = window.localStorage.getItem("closedai-unit-id");
-        const documents = unitId ? await api.documents(unitId) : [];
-        const names = documents.map(document => document.filename.replace(/\.[^.]+$/, ""));
-        setCrawlerDocuments(names);
-        const questionWords = tokenizeWords(question, 12);
-        setSearchWords(names.length ? [...names, ...questionWords] : [...questionWords, "notes", "slides", "past papers", "answers", "sources"]);
-      } catch {
-        setSearchWords([...tokenizeWords(question, 12), "notes", "slides", "past papers"]);
-      }
-    })();
     setMessages(current => [...current, { id: crypto.randomUUID(), role: "user", content: message, sources: null }, { id: crypto.randomUUID(), role: "assistant", content: "", sources: null }]);
     const abort = new AbortController(); controller.current = abort;
     let terminal = false;
@@ -202,9 +192,9 @@ export function Chat({ conversationId }: { conversationId?: string }) {
           const record = data as Record<string, unknown>;
           if (eventName === "token") {
             setThinking(false);
-            setWorkingStatus(undefined);
-            setCrawlerVisible(false);
+            setWorkingPhase(undefined);
             streamBuffer.current += String(record.text ?? "");
+            chatSound.tokens(new SoundTokenBatch(String(record.text ?? "")));
             if (streamFrame.current === null) {
               streamFrame.current = window.requestAnimationFrame(() => {
                 streamFrame.current = null;
@@ -216,23 +206,18 @@ export function Chat({ conversationId }: { conversationId?: string }) {
           }
           if (eventName === "status") {
             setThinking(true);
-            setWorkingStatus(typeof record.text === "string" ? record.text : "Searching your notes...");
-            if (["embedding", "searching", "reading", "writing"].includes(String(record.phase))) {
-              setCrawlerStatus({
-                phase: record.phase as CrawlerStatus["phase"],
-                query: typeof record.query === "string" ? record.query : "",
-                results: Array.isArray(record.results) ? record.results.filter((item): item is CrawlerStatus["results"][number] => Boolean(item && typeof item === "object" && typeof (item as { filename?: unknown }).filename === "string" && typeof (item as { page?: unknown }).page === "number")) : [],
-                count: typeof record.count === "number" ? record.count : 0,
-              });
-            }
+            setWorkingPhase(typeof record.phase === "string" ? record.phase : undefined);
           }
           if (eventName === "sources") setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, sources: data as Source[] } : item));
-          if (eventName === "done" && typeof record.conversation_id === "string") {
+          if (eventName === "done") {
             terminal = true;
-            setActiveConversation(record.conversation_id);
-            if (!activeConversation) {
+            chatSound.done();
+            if (typeof record.conversation_id === "string") {
+              setActiveConversation(record.conversation_id);
+              if (!activeConversation) {
               window.dispatchEvent(new CustomEvent("closedai:conversation-created", { detail: { id: record.conversation_id, title: message.trim().slice(0, 60) || "New conversation", created_at: new Date().toISOString() } }));
               router.push(`/chat/${record.conversation_id}`);
+              }
             }
           }
           if (eventName === "error") {
@@ -240,7 +225,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
             setLimitReached(record.code === "limit_reached");
             terminal = true;
             setError(`I couldn't complete that: ${message}`);
-            setCrawlerVisible(false);
+            chatSound.error();
           }
         }
         if (done) break;
@@ -251,8 +236,8 @@ export function Chat({ conversationId }: { conversationId?: string }) {
         const detail = caught instanceof Error ? caught.message : "";
         setError(detail && detail !== "Failed to fetch" ? detail : "I couldn't reach ClosedAI. Check your connection and try again.");
       }
-      setCrawlerVisible(false);
-    } finally { controller.current = null; setCrawlerVisible(false); setThinking(false); setWorkingStatus(undefined); setStreaming(false); }
+      chatSound.error();
+    } finally { controller.current = null; setThinking(false); setWorkingPhase(undefined); setStreaming(false); }
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -261,42 +246,13 @@ export function Chat({ conversationId }: { conversationId?: string }) {
 
   return <div className="app-chat flex min-h-0 min-w-0 flex-1 flex-col">
     <div className="app-chat-scroll relative min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
-      {crawlerVisible && <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden bg-slate-950/45" aria-live="polite">
-        <CrawlerCanvas mode="search" words={searchWords} documents={crawlerDocuments} status={crawlerStatus} />
-        <div className="absolute left-3 right-3 top-3 flex items-center gap-3 border border-white/10 bg-slate-950/80 px-3 py-2 font-mono text-[11px] text-slate-300">
-          <span className="font-semibold text-teal-200">closedai-crawler</span>
-          <span>{crawlerStatus?.phase ?? "embedding"}</span>
-          <span className="truncate text-pink-200">{crawlerStatus?.query ?? "ambient scan"}</span>
-        </div>
-        <div className="absolute bottom-3 left-3 right-3 grid grid-cols-3 gap-2 font-mono text-[10px] text-slate-300">
-          <section className="min-h-24 border border-white/10 bg-slate-950/85 p-2">
-            <h2 className="text-white">CRAWL LOG</h2>
-            <p>{crawlerStatus?.phase === "searching" ? `searching: ${crawlerStatus.query}` : `${crawlerStatus?.phase ?? "embedding"}: ambient scan`}</p>
-            {crawlerStatus?.results.map(result => <p key={`${result.filename}-${result.page}`} className="truncate">found 1 in {result.filename}, page {result.page}</p>)}
-          </section>
-          <section className="border border-white/10 bg-slate-950/85 p-2">
-            <h2 className="text-white">DOCUMENTS</h2>
-            {crawlerDocuments.map(filename => {
-              const count = crawlerStatus?.results.filter(result => result.filename === filename || result.filename.replace(/\.[^.]+$/, "") === filename).length ?? 0;
-              return <div key={filename} className="mt-1"><div className="flex justify-between"><span className="truncate">{filename}</span><span>{count}</span></div><div className="h-px bg-white/10"><div className="h-px bg-teal-300" style={{ width: `${count ? Math.min(100, 100 / Math.max(1, count)) : 0}%` }} /></div></div>;
-            })}
-          </section>
-          <section className="border border-white/10 bg-slate-950/85 p-2">
-            <h2 className="text-white">MATCHES</h2>
-            {crawlerDocuments.map(filename => {
-              const count = crawlerStatus?.results.filter(result => result.filename === filename || result.filename.replace(/\.[^.]+$/, "") === filename).length ?? 0;
-              return count > 0 ? <div key={filename} className="mt-1 flex items-center gap-2"><span className="w-20 truncate">{filename}</span><div className="h-1 flex-1 bg-white/10"><div className="h-1 bg-pink-300" style={{ width: `${Math.min(100, count * 20)}%` }} /></div></div> : null;
-            })}
-          </section>
-        </div>
-      </div>}
       <div className="mx-auto max-w-3xl space-y-5">
         {loading && <div className="h-24 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />}
         {!loading && messages.length === 0 && <div className="py-20 text-center"><h1 className="text-2xl font-semibold">What are we exploring?</h1><p className="mt-2 rounded-md bg-slate-950/70 px-3 py-1.5 text-slate-200 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">Ask a question grounded in your uploaded documents.</p></div>}
         <MessageListErrorBoundary>
           {messages.map(message => <MessageErrorBoundary key={message.id} rawText={message.content ?? ""}><MessageItem message={message} streaming={streaming} /></MessageErrorBoundary>)}
         </MessageListErrorBoundary>
-        {streaming && thinking && <ThinkingIndicator status={workingStatus} />}
+        {streaming && thinking && <ThinkingIndicator phase={workingPhase} />}
         {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-300/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 backdrop-blur"><span>{error}</span>{lastMessage && <button type="button" onClick={() => void send(lastMessage)} disabled={streaming} className="shrink-0 rounded-full bg-white/10 px-3 py-1 font-semibold text-white hover:bg-white/15">Retry</button>}</div>}
         {limitReached && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-amber-300/40 bg-amber-950/85 px-4 py-3 text-sm text-white backdrop-blur"><span>You’ve reached your current allowance. Add tokens to keep chatting.</span><a href="/upgrade" className="shrink-0 rounded-full bg-white px-3 py-1 font-semibold text-slate-950">Upgrade</a></div>}
         <div ref={bottom} />
@@ -312,7 +268,8 @@ export function Chat({ conversationId }: { conversationId?: string }) {
       </div>}
       <div className="app-composer flex items-end gap-2">
         <textarea ref={inputRef} aria-label="Message" rows={1} value={input} onChange={event => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={streaming} placeholder="Ask your documents…" className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2 outline-none disabled:opacity-60" />
-        {streaming ? <button type="button" onClick={() => { setCrawlerVisible(false); controller.current?.abort(); }} aria-label="Stop response" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-lg">■</button> : <button type="submit" disabled={!input.trim() && !quote} aria-label="Send message" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xl disabled:opacity-40">↑</button>}
+        <SoundToggle />
+        {streaming ? <button type="button" onClick={() => { controller.current?.abort(); chatSound.stop(); setThinking(false); }} aria-label="Stop response" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-lg">■</button> : <button type="submit" disabled={!input.trim() && !quote} aria-label="Send message" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xl disabled:opacity-40">↑</button>}
       </div>
       </div>
     </form>
