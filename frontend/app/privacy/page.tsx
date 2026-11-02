@@ -2,7 +2,7 @@ export default function PrivacyPage() {
   return <LegalPage title="Privacy">
     <p>ClosedAI collects your name, email address, uploaded files and chat history so you can study across your own documents.</p>
     <h2>AI processing</h2>
-    <p>Your files are not used to train ClosedAI models. Relevant uploaded text and chat context are sent to the configured AI provider to answer your questions.</p>
+    <p>Your files are not used to train ClosedAI models. Relevant uploaded text, including text read from images, and chat context are sent to the configured AI provider to answer your questions. Uploaded images are sent to the AI provider so they can be read and described.</p>
     <h2>Deletion</h2>
     <p>You can request deletion of your account and associated data by contacting the service operator.</p>
   </LegalPage>;

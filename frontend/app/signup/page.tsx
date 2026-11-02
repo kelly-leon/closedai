@@ -6,8 +6,10 @@ import { supabase } from "../../lib/supabase";
 import { AuthShell } from "../../components/auth/AuthShell";
 import { signupDecision } from "../../lib/signupDecision";
 import { wakeBackend } from "../../lib/wakeBackend";
+import { useRouter } from "next/navigation";
 
 export default function SignupPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -27,7 +29,7 @@ export default function SignupPage() {
     const { data, error: authError } = await supabase!.auth.signUp({
       email: email.trim(),
       password,
-      options: { data: { full_name: fullName.trim() } },
+      options: { data: { full_name: fullName.trim() }, emailRedirectTo: `${window.location.origin}/app` },
     });
     const decision = signupDecision(data, authError);
     if (decision === "duplicate") {
@@ -36,10 +38,10 @@ export default function SignupPage() {
       setError("Too many signup attempts. Please wait a moment and try again.");
     } else if (decision === "error") {
       setError("We couldn't create your account. Please try again.");
+    } else if (data.session) {
+      router.replace("/app");
     } else {
-      setMessage(data.user && !data.session
-        ? "Check your email and confirm your address before signing in."
-        : "Check your email to confirm your account.");
+      setMessage("Check your email to confirm your account. Your confirmation link will open ClosedAI and sign you in.");
     }
   }
   async function google() {

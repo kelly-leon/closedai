@@ -23,6 +23,68 @@
 .app-mobile-bar button { width: 36px; height: 36px; border: 0; background: transparent; color: var(--closedai-cream); font-size: 1.2rem; }
 .app-mobile-home { display: flex; gap: 7px; color: var(--closedai-cream); font-size: .85rem; text-decoration: none; }
 .app-chat { background: var(--closedai-ink); padding-top: 58px; }
+.brand-loader {
+  display: inline-grid;
+  place-items: center;
+}
+.brand-loader-mark {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--closedai-cream);
+  font-weight: 700;
+  letter-spacing: -.04em;
+  animation: brand-pulse 1.8s ease-in-out infinite;
+}
+.brand-loader-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(245, 240, 247, .18);
+  border-radius: 999px;
+  animation: brand-orbit 1.6s linear infinite;
+}
+.brand-loader-dot {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 999px;
+  background: var(--closedai-lime);
+  box-shadow: 0 0 8px rgba(185, 255, 102, .7);
+}
+.brand-loader-small {
+  width: 48px;
+  height: 24px;
+}
+.brand-loader-small .brand-loader-mark {
+  min-height: 22px;
+  font-size: 0;
+  padding: 0;
+  width: 22px;
+}
+.auth-beta-link {
+  position: absolute;
+  bottom: 18px;
+  left: 32px;
+  color: var(--closedai-muted);
+  font-size: .78rem;
+}
+.auth-beta-link:hover { color: var(--closedai-cream); }
+@keyframes brand-pulse {
+  0%, 100% { opacity: .72; transform: scale(.98); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes brand-orbit {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-loader-mark, .brand-loader-ring { animation: none; }
+  .brand-loader-dot { display: none; }
+}
 @media (min-width: 768px) { .app-chat { padding-top: 0; } }
 .app-chat-scroll { background: radial-gradient(circle at 82% 12%, rgba(185,255,102,.035), transparent 28%); }
 .app-user-message { margin-bottom: 2px; padding: 14px 16px; border-radius: 18px 18px 4px 18px; background: #242129; color: var(--closedai-cream); }
@@ -39,6 +101,23 @@
   margin-top: .25em;
   margin-bottom: .25em;
 }
+.app-chat .app-assistant-message .prose li > p {
+  margin: 0;
+}
+.app-chat .app-assistant-message .prose h1,
+.app-chat .app-assistant-message .prose h2,
+.app-chat .app-assistant-message .prose h3 {
+  margin-top: 1em;
+  margin-bottom: .4em;
+}
+.app-chat .app-assistant-message .prose p { margin-top: .6em; margin-bottom: .6em; }
+.app-chat .app-assistant-message .prose br + h1,
+.app-chat .app-assistant-message .prose br + h2,
+.app-chat .app-assistant-message .prose br + h3,
+.app-chat .app-assistant-message .prose br + p,
+.app-chat .app-assistant-message .prose br + ul,
+.app-chat .app-assistant-message .prose br + ol,
+.app-chat .app-assistant-message .prose br + blockquote { display: none; }
 .app-chat .app-assistant-message .prose p:first-child,
 .app-chat .app-assistant-message .prose h1:first-child,
 .app-chat .app-assistant-message .prose h2:first-child,

@@ -1,7 +1,7 @@
 "use client";
 
 import { Component, ErrorInfo, FormEvent, KeyboardEvent, memo, ReactNode, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { api, Source } from "../lib/api";
 import { SourceList } from "./SourceList";
 import { ThinkingIndicator } from "./ThinkingIndicator";
@@ -9,6 +9,10 @@ import { MessageContent } from "./MessageContent";
 import * as Sentry from "@sentry/nextjs";
 import { SoundToggle } from "./SoundToggle";
 import { chatSound, SoundTokenBatch } from "../lib/sound";
+import { seedQuery } from "../lib/query";
+import { storeLastChat } from "../lib/lastChat";
+import { ChatDocumentEmptyState } from "./ChatDocumentEmptyState";
+import { REQUIRE_DOCUMENT_TO_CHAT } from "../lib/config";
 
 interface DisplayMessage { id: string; role: "user" | "assistant"; content: string | null; sources: Source[] | null }
 interface SelectionButton { text: string; left: number; top: number }
@@ -64,7 +68,6 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   const controller = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const router = useRouter();
   const pathname = usePathname();
   const [activeConversation, setActiveConversation] = useState(conversationId);
   const [quote, setQuote] = useState<string | null>(null);
@@ -73,10 +76,23 @@ export function Chat({ conversationId }: { conversationId?: string }) {
   const streamBuffer = useRef("");
   const streamFrame = useRef<number | null>(null);
   const [workingPhase, setWorkingPhase] = useState<string | undefined>();
+  const [unitReady, setUnitReady] = useState(false);
+  const [unitId, setUnitId] = useState("");
 
   useEffect(() => {
     chatSound.stop();
   }, [pathname]);
+
+  useEffect(() => {
+    const refreshUnit = () => {
+      const current = window.localStorage.getItem("closedai-unit-id") ?? "";
+      setUnitId(current);
+      setUnitReady(false);
+    };
+    refreshUnit();
+    window.addEventListener("closedai:unit-changed", refreshUnit);
+    return () => window.removeEventListener("closedai:unit-changed", refreshUnit);
+  }, []);
 
   useEffect(() => () => {
     chatSound.unmount();
@@ -154,6 +170,8 @@ export function Chat({ conversationId }: { conversationId?: string }) {
 
   useEffect(() => {
     setActiveConversation(conversationId);
+    const unitId = window.localStorage.getItem("closedai-unit-id");
+    if (conversationId && unitId) storeLastChat(conversationId, unitId);
   }, [conversationId]);
 
   useEffect(() => {
@@ -215,8 +233,14 @@ export function Chat({ conversationId }: { conversationId?: string }) {
             if (typeof record.conversation_id === "string") {
               setActiveConversation(record.conversation_id);
               if (!activeConversation) {
-              window.dispatchEvent(new CustomEvent("closedai:conversation-created", { detail: { id: record.conversation_id, title: message.trim().slice(0, 60) || "New conversation", created_at: new Date().toISOString() } }));
-              router.push(`/chat/${record.conversation_id}`);
+                window.history.replaceState(null, "", `/chat/${record.conversation_id}`);
+                const unitId = window.localStorage.getItem("closedai-unit-id");
+                if (unitId) storeLastChat(record.conversation_id, unitId);
+                setMessages(current => {
+                  seedQuery(`conversation:${record.conversation_id}`, current.map(item => ({ id: item.id, role: item.role, content: item.content ?? "", sources: item.sources })));
+                  return current;
+                });
+                window.dispatchEvent(new CustomEvent("closedai:conversation-created", { detail: { id: record.conversation_id, title: message.trim().slice(0, 60) || "New conversation", created_at: new Date().toISOString() } }));
               }
             }
           }
@@ -248,7 +272,7 @@ export function Chat({ conversationId }: { conversationId?: string }) {
     <div className="app-chat-scroll relative min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
       <div className="mx-auto max-w-3xl space-y-5">
         {loading && <div className="h-24 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />}
-        {!loading && messages.length === 0 && <div className="py-20 text-center"><h1 className="text-2xl font-semibold">What are we exploring?</h1><p className="mt-2 rounded-md bg-slate-950/70 px-3 py-1.5 text-slate-200 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">Ask a question grounded in your uploaded documents.</p></div>}
+        {!loading && messages.length === 0 && unitId && (!unitReady ? <ChatDocumentEmptyState onReady={() => { setUnitReady(true); window.setTimeout(() => inputRef.current?.focus(), 0); }} /> : <div className="py-20 text-center"><h1 className="text-2xl font-semibold">What are we exploring?</h1><p className="mt-2 rounded-md bg-slate-950/70 px-3 py-1.5 text-slate-200 [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)]">Ask a question grounded in your uploaded documents.</p></div>)}
         <MessageListErrorBoundary>
           {messages.map(message => <MessageErrorBoundary key={message.id} rawText={message.content ?? ""}><MessageItem message={message} streaming={streaming} /></MessageErrorBoundary>)}
         </MessageListErrorBoundary>
@@ -266,8 +290,9 @@ export function Chat({ conversationId }: { conversationId?: string }) {
         <p className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap">{quote}</p>
         <button type="button" onClick={() => setQuote(null)} className="text-base leading-none text-[#e8ecf4]" aria-label="Remove quoted text">×</button>
       </div>}
+      {!unitReady && <p className="mb-2 text-xs text-slate-300">Answers work best once you've uploaded your files.</p>}
       <div className="app-composer flex items-end gap-2">
-        <textarea ref={inputRef} aria-label="Message" rows={1} value={input} onChange={event => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={streaming} placeholder="Ask your documents…" className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2 outline-none disabled:opacity-60" />
+        <textarea ref={inputRef} aria-label="Message" rows={1} value={input} onChange={event => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={streaming || (REQUIRE_DOCUMENT_TO_CHAT && !unitReady)} placeholder={REQUIRE_DOCUMENT_TO_CHAT && !unitReady ? "Upload a document to start chatting" : "Ask your documents…"} className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-2 outline-none disabled:opacity-60" />
         <SoundToggle />
         {streaming ? <button type="button" onClick={() => { controller.current?.abort(); chatSound.stop(); setThinking(false); }} aria-label="Stop response" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-lg">■</button> : <button type="submit" disabled={!input.trim() && !quote} aria-label="Send message" className="app-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xl disabled:opacity-40">↑</button>}
       </div>

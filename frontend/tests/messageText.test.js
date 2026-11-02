@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const { parseCitations, tokenizeWords } = require("../lib/messageText.js");
 const { crawlerOverlayVisible } = require("../lib/crawlerOverlay.js");
 const { signupDecision } = require("../lib/signupDecision.js");
-const { safeMessageText, splitQuotedMessage } = require("../lib/messageContent.js");
+const { safeMessageText, normalizeMessageText, splitQuotedMessage } = require("../lib/messageContent.js");
 const React = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");
 
@@ -54,6 +54,11 @@ test("saved message newline, markdown break, list, and citation shapes remain re
     const text = safeMessageText(content);
     assert.doesNotThrow(() => splitQuotedMessage(text));
   }
+});
+
+test("message text collapses excess blank lines without removing list structure", () => {
+  assert.equal(normalizeMessageText("One\n\n\n\nTwo"), "One\n\nTwo");
+  assert.equal(normalizeMessageText("One\n\n\n1. first\n2. second\n3. third\n\n## Heading\n\n[notes, page 1]"), "One\n\n1. first\n2. second\n3. third\n\n## Heading\n\n[notes, page 1]");
 });
 
 test("saved messages render markdown and citation variants without React errors", async () => {

@@ -55,6 +55,16 @@ function createQueryStore() {
     }
   }
 
+  function seed(key, data) {
+    const entry = get(key);
+    entry.status = "success";
+    entry.data = data;
+    entry.error = undefined;
+    entry.expiresAt = Date.now() + 30 * 60 * 1000;
+    entry.inflight = undefined;
+    publish(key);
+  }
+
   function registerReloader(key, reloader) {
     reloaders.set(key, reloader);
   }
@@ -71,7 +81,7 @@ function createQueryStore() {
     reloaders.clear();
   }
 
-  return { fetch, subscribe, snapshot, invalidate, registerReloader, refetchAll, reset };
+  return { fetch, subscribe, snapshot, seed, invalidate, registerReloader, refetchAll, reset };
 }
 
 module.exports = { createQueryStore };

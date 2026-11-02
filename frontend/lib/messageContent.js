@@ -2,6 +2,12 @@ function safeMessageText(content) {
   return typeof content === "string" ? content : "";
 }
 
+function normalizeMessageText(content) {
+  return safeMessageText(content)
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
 function splitQuotedMessage(content) {
   const text = safeMessageText(content);
   if (!text.startsWith("> ")) return { quote: null, question: text };
@@ -16,4 +22,4 @@ function splitQuotedMessage(content) {
   return { quote: quoted.join("\n") || null, question: lines.slice(index).join("\n") };
 }
 
-module.exports = { safeMessageText, splitQuotedMessage };
+module.exports = { safeMessageText, normalizeMessageText, splitQuotedMessage };

@@ -7,6 +7,7 @@ import { ApiError, api, ConversationSummary, SERVER_WAKE_MESSAGE, Unit, Usage } 
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
 import { invalidateShared } from "../lib/sharedData";
 import { installQueryLifecycleListeners } from "../lib/query";
+import { BrandLoader } from "./BrandLoader";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -175,7 +176,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (initialError) return <main className="relative z-10 flex h-screen items-center justify-center bg-slate-950 px-5 text-center text-white"><div><p role="alert" className="max-w-md text-slate-200">{initialError}</p><button type="button" onClick={() => void loadWorkspace()} className="mt-4 rounded-lg bg-sky-300 px-4 py-2 font-semibold text-slate-950">Retry</button></div></main>;
   return <div className="app-shell relative z-10 flex h-screen overflow-hidden text-slate-100 supports-[height:100dvh]:h-dvh">
     {wakingServer && <div role="status" className="fixed inset-x-0 top-3 z-[100] mx-auto flex w-fit items-center gap-3 rounded-xl border border-sky-300/20 bg-slate-900/95 px-4 py-3 text-sm text-slate-100 shadow-xl">
-      <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-300 border-t-transparent" />
+      <BrandLoader className="brand-loader-small" />
       <span>{SERVER_WAKE_MESSAGE}</span>
     </div>}
     <header className="app-mobile-bar md:hidden">
@@ -235,9 +236,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="truncate text-white">{userName || userEmail}</span>
             <div className="flex gap-2">
               <button onClick={() => { setDeleteDialog(true); setDeleteConfirmation(""); setDeleteError(""); }} className="rounded px-2 py-1 text-red-300 hover:bg-red-950/40">Delete my account</button>
-              <button onClick={async () => { await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
+              <button onClick={async () => { await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); sessionStorage.removeItem("closedai-last-chat"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
             </div>
           </div>
+      </div>}
+      {!rail && <div className="shrink-0 px-3 pb-3 text-center text-[11px] text-slate-400">
+        <a href="https://kellyleon.vercel.app/" target="_blank" rel="noopener noreferrer" className="hover:text-slate-200">From Beta</a>
       </div>}
     </aside>
     {deleteDialog && <div role="dialog" aria-modal="true" aria-labelledby="delete-account-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">

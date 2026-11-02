@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AdminRequest, ApiError, api, UsageSummary } from "../../lib/api";
+import { BackToChat } from "../../components/BackToChat";
 
 type Tab = "pending" | "approved" | "rejected";
 
@@ -72,7 +73,7 @@ export default function AdminPage() {
   if (!allowed) return <div className="flex h-full items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
   return <div className="app-page h-full overflow-y-auto text-white">
     <div className="app-page-inner mx-auto max-w-6xl">
-      <h1 className="text-3xl font-semibold">Admin dashboard</h1>
+      <div className="flex items-start justify-between gap-4"><h1 className="text-3xl font-semibold">Admin dashboard</h1><BackToChat className="rounded-lg border px-3 py-2 text-sm backdrop-blur" /></div>
       {!notifierConfigured && <p role="status" className="mt-4 text-sm text-amber-200">Email alerts are off; check Pending regularly</p>}
       {!mailerConfigured && <p role="status" className="mt-2 rounded border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-200">User emails are off. Missing: {(mailerStatus?.missing?.join(", ") || (mailProvider === "none" ? "MAIL_PROVIDER" : "mailer configuration"))}</p>}
       <section className="mt-4 flex flex-wrap items-center gap-3">

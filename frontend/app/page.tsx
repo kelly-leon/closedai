@@ -131,6 +131,7 @@ function LandingPage({ signedIn }: { signedIn: boolean }) {
             <p className="footer-copy">Ask anything about your own files.</p>
           </div>
           <nav aria-label="Footer">
+          <a href="https://kellyleon.vercel.app/" target="_blank" rel="noopener noreferrer">From Beta</a>
           <Link href="/privacy">Privacy</Link>
           <Link href="/terms">Terms</Link>
           {contact && <a href={`mailto:${contact}`} className="hover:text-white">Contact</a>}

@@ -9,6 +9,9 @@ const store = createQueryStore();
 export function snapshot<T>(key: string): QuerySnapshot<T> { return store.snapshot(key) as QuerySnapshot<T>; }
 export function fetchQuery<T>(key: string, loader: () => Promise<T>, staleMs = 30_000): Promise<T> { return store.fetch(key, loader, staleMs); }
 export function invalidateQuery(prefix: string) { store.invalidate(prefix); }
+export function seedQuery<T>(key: string, data: T) {
+  store.seed(key, data);
+}
 
 export function useQuery<T>(key: string, loader: () => Promise<T>, staleMs = 30_000, enabled = true) {
   const [value, setValue] = useState<QuerySnapshot<T>>(() => snapshot<T>(key));

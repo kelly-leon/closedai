@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
+import { BrandLoader } from "./BrandLoader";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -15,23 +16,32 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!supabaseAuthEnabled || !supabase) { setSignedIn(false); setReady(true); return; }
     let active = true;
-    const applySession = (hasSession: boolean) => {
+    const applySession = (session: { user?: { id: string } } | null) => {
+      const hasSession = Boolean(session);
+      if (hasSession && session?.user?.id) {
+        const previousUser = window.localStorage.getItem("closedai-user-id");
+        if (previousUser && previousUser !== session.user.id) {
+          window.localStorage.removeItem("closedai-unit-id");
+          sessionStorage.removeItem("closedai-last-chat");
+        }
+        window.localStorage.setItem("closedai-user-id", session.user.id);
+      }
       if (!active) return;
       setSignedIn(hasSession);
       setReady(true);
       if (!hasSession && !authPage && !publicPage) router.replace("/login");
       if (hasSession && authPage && pathname !== "/auth/reset") router.replace("/app");
     };
-    void supabase.auth.getSession().then(({ data }) => applySession(Boolean(data.session)));
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => applySession(Boolean(session)));
+    void supabase.auth.getSession().then(({ data }) => applySession(data.session));
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => applySession(session));
     return () => { active = false; subscription.subscription.unsubscribe(); };
   }, [pathname, router, authPage, publicPage]);
 
   if (!ready && supabaseAuthEnabled) {
-    return <div className="flex h-screen items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
+    return <div className="flex h-screen items-center justify-center"><BrandLoader /></div>;
   }
   if (supabaseAuthEnabled && ready && signedIn && authPage) {
-    return <div className="flex h-screen items-center justify-center"><div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" /></div>;
+    return <div className="flex h-screen items-center justify-center"><BrandLoader /></div>;
   }
   if (supabaseAuthEnabled && authPage) return <>{children}</>;
   return <>{children}</>;

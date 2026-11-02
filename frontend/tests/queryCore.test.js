@@ -36,3 +36,17 @@ test("one failed load never leaves a permanent loading state", async () => {
   assert.equal(store.snapshot("conversations").status, "error");
   assert.equal(store.snapshot("conversations").data, undefined);
 });
+
+test("document deletion invalidation reloads documents and usage caches", async () => {
+  const store = createQueryStore();
+  store.seed("documents:unit-1", [{ id: "doc-1" }]);
+  store.seed("usage", { documents_used: 1 });
+  store.invalidate("documents:");
+  store.invalidate("usage");
+  let documentsCalls = 0;
+  let usageCalls = 0;
+  await store.fetch("documents:unit-1", () => { documentsCalls += 1; return Promise.resolve([]); }, 0);
+  await store.fetch("usage", () => { usageCalls += 1; return Promise.resolve({ documents_used: 0 }); }, 0);
+  assert.equal(documentsCalls, 1);
+  assert.equal(usageCalls, 1);
+});

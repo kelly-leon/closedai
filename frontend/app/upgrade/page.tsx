@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ApiError, api, BillingPackage, BillingRequest } from "../../lib/api";
+import { BackToChat } from "../../components/BackToChat";
 
 export default function UpgradePage() {
   const [packages, setPackages] = useState<BillingPackage[]>([]);
@@ -56,7 +57,7 @@ export default function UpgradePage() {
 
   return <div className="app-page h-full overflow-y-auto text-white">
     <div className="app-page-inner mx-auto max-w-5xl">
-      <h1 className="text-3xl font-semibold">Upgrade ClosedAI</h1>
+      <div className="flex items-start justify-between gap-4"><h1 className="text-3xl font-semibold">Upgrade ClosedAI</h1><BackToChat className="rounded-lg border px-3 py-2 text-sm backdrop-blur" /></div>
       <p className="mt-2 text-slate-300">Choose tokens or premium access. Your award is reviewed manually.</p>
       <section className="mt-8">
         <h2 className="text-lg font-semibold">1. Choose a package</h2>

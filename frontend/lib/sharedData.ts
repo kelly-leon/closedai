@@ -22,3 +22,15 @@ export function invalidateShared(prefix: string) {
   for (const key of values.keys()) if (key.startsWith(prefix)) values.delete(key);
   for (const key of inflight.keys()) if (key.startsWith(prefix)) inflight.delete(key);
 }
+
+export function setShared<T>(key: string, value: T, ttlMs = 30_000) {
+  values.set(key, { value, expires: Date.now() + ttlMs });
+}
+
+export async function removeDocumentCached(unitId: string, id: string) {
+  const key = `documents:${unitId}`;
+  const cached = values.get(key);
+  if (!cached) return;
+  const documents = cached.value as Array<{ id: string }>;
+  values.set(key, { value: documents.filter(document => document.id !== id), expires: cached.expires });
+}
