@@ -30,7 +30,6 @@ def ensure_plan(db: Session, user_id: UUID) -> UserPlan:
         )
         db.add(plan)
         db.commit()
-        db.refresh(plan)
     return plan
 
 

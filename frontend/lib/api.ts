@@ -1,6 +1,7 @@
 import { supabase, supabaseAuthEnabled } from "./supabase";
-import { fetchQuery } from "./query";
+import { fetchQuery, invalidateQuery } from "./query";
 import { invalidateShared } from "./sharedData";
+import { timingStart } from "./timing";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -12,27 +13,42 @@ export class ApiError extends Error {
 }
 
 export const SERVER_WAKE_MESSAGE = "Waking the server up, this can take up to a minute on the first visit";
-const RETRY_DELAYS = [1500, 3000, 6000, 10000];
 const WAKEABLE_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAYS = [1500, 3000, 6000, 10000];
 let wakingRequests = 0;
+let wakeBannerTimer: number | undefined;
 
 function setWaking(active: boolean) {
   wakingRequests = Math.max(0, wakingRequests + (active ? 1 : -1));
-  window.dispatchEvent(new CustomEvent("closedai:server-waking", { detail: wakingRequests > 0 }));
+  if (wakingRequests > 0 && wakeBannerTimer === undefined) {
+    wakeBannerTimer = window.setTimeout(() => {
+      wakeBannerTimer = undefined;
+      if (wakingRequests > 0) window.dispatchEvent(new CustomEvent("closedai:server-waking", { detail: true }));
+    }, 2000);
+  } else if (wakingRequests === 0) {
+    if (wakeBannerTimer !== undefined) window.clearTimeout(wakeBannerTimer);
+    wakeBannerTimer = undefined;
+    window.dispatchEvent(new CustomEvent("closedai:server-waking", { detail: false }));
+  }
 }
 
 export async function waitForBackend(timeoutMs = 90_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   setWaking(true);
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`${API_URL}/health`, { cache: "no-store" });
-      if (response.ok) { setWaking(false); return true; }
-    } catch { /* Backend is still cold-starting. */ }
-    await delay(Math.min(3000, deadline - Date.now()));
+  try {
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${API_URL}/health`, { cache: "no-store", signal: AbortSignal.timeout(5000) });
+        if (response.ok) return true;
+      } catch {
+        // Keep probing until the bounded wake window expires.
+      }
+      await delay(Math.min(1500, deadline - Date.now()));
+    }
+    return false;
+  } finally {
+    setWaking(false);
   }
-  setWaking(false);
-  return false;
 }
 
 function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
@@ -52,6 +68,58 @@ function isProtectedNonIdempotent(path: string, init: RequestInit) {
   const method = methodOf(init);
   return (method === "POST" && /^(\/chat|\/billing\/requests|\/documents(?:\/|$))/.test(path))
     || (method === "DELETE" && /^\/me(?:\/|$)/.test(path));
+}
+
+function fetchWithTimeout(path: string, init: RequestInit, timeoutMs = 12_000): Promise<Response> {
+  const controller = new AbortController();
+  const externalSignal = init.signal;
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return fetch(`${API_URL}${path}`, { ...init, signal: controller.signal }).catch(error => {
+    if (externalSignal?.aborted) throw error;
+    throw new ApiError(
+      timedOut ? "The request timed out. Reconnecting…" : "We couldn't reach ClosedAI. Check your connection and try again.",
+      true,
+    );
+  }).finally(() => {
+    window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
+  });
+}
+
+function notifySidebarMutation(path: string, method: string): void {
+  if (typeof window === "undefined" || method === "GET") return;
+  const unitsChanged = /^\/units(?:\/|$)/.test(path);
+  const conversationsChanged = /^\/conversations(?:\/|$)/.test(path) || path === "/chat";
+  const documentsChanged = /^\/documents(?:\/|$)/.test(path);
+  const usageChanged = documentsChanged || conversationsChanged
+    || path === "/redeem"
+    || /^\/billing\/(?:requests|admin\/grant)/.test(path)
+    || (/^\/me(?:\/|$)/.test(path) && path !== "/me");
+  if (!unitsChanged && !conversationsChanged && !documentsChanged && !usageChanged) return;
+  if (unitsChanged) {
+    invalidateShared("units");
+    invalidateQuery("units");
+  }
+  if (conversationsChanged) {
+    invalidateShared("conversations:");
+    invalidateQuery("conversations:");
+  }
+  if (documentsChanged) {
+    invalidateShared("documents:");
+    invalidateQuery("documents:");
+  }
+  if (usageChanged) {
+    invalidateShared("usage");
+    invalidateQuery("usage");
+  }
+  window.dispatchEvent(new CustomEvent("closedai:sidebar-invalidated"));
 }
 
 export interface ConversationSummary { id: string; title: string; created_at: string }
@@ -92,27 +160,28 @@ async function forceLogin(): Promise<void> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const finishTiming = timingStart(path.split("?", 1)[0]);
   let headers = new Headers(init.headers);
   Object.entries(await authHeaders()).forEach(([key, value]) => headers.set(key, String(value)));
   const protectedPost = isProtectedNonIdempotent(path, init);
-  const attempts = protectedPost ? 1 : RETRY_DELAYS.length + 1;
+  const sidebarRequest = /^\/(?:me\/bootstrap|me\/usage|units|conversations|documents)(?:\/|$|\?)/.test(path);
+  const attempts = protectedPost || sidebarRequest ? 1 : RETRY_DELAYS.length + 1;
   let response: Response | undefined;
-  let waking = false;
+  let retries = 0;
+  try {
   for (let attempt = 0; attempt < attempts; attempt++) {
+    retries = attempt;
     try {
-      response = await fetch(`${API_URL}${path}`, { ...init, headers });
+      response = await fetchWithTimeout(path, { ...init, headers });
     } catch (error) {
       if (init.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-      if (!protectedPost && await waitForBackend()) {
-        continue;
-      }
-      throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
+      if (!protectedPost && !sidebarRequest && await waitForBackend()) continue;
+      throw error instanceof ApiError ? error : new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
     }
     if (!WAKEABLE_STATUSES.has(response.status)) break;
     if (protectedPost) break;
-    if (await waitForBackend()) continue;
+    if (!sidebarRequest && await waitForBackend()) continue;
   }
-  if (waking) setWaking(false);
   if (!response) throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
   if (response.status === 401 && supabaseAuthEnabled) {
     if (!supabase) throw new ApiError("Authentication is unavailable.");
@@ -129,7 +198,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${refreshed.data.session.access_token}`);
     try {
-      response = await fetch(`${API_URL}${path}`, { ...init, headers });
+      retries += 1;
+      response = await fetchWithTimeout(path, { ...init, headers });
     } catch {
       throw new ApiError("We couldn't reach ClosedAI. Check your connection and try again.", true);
     }
@@ -150,10 +220,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       detail = typeof payload === "string" ? payload : typeof payload === "object" && payload && "message" in payload ? String((payload as { message: unknown }).message) : detail;
     } catch { /* friendly fallback */ }
     const code = typeof structuredPayload === "object" && structuredPayload && "code" in structuredPayload ? String((structuredPayload as { code: unknown }).code) : undefined;
-    throw new ApiError(detail, response.status >= 500, code, requestId);
+    throw new ApiError(detail, response.status >= 500 || WAKEABLE_STATUSES.has(response.status), code, requestId);
   }
+  notifySidebarMutation(path, methodOf(init));
   if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  return await response.json() as T;
+  } finally {
+    finishTiming(response?.status ?? "network-error", retries);
+  }
 }
 
 export const api = {
@@ -211,6 +285,7 @@ export const api = {
       }
       if (response.status === 401) await forceLogin();
     }
+    if (response.ok) notifySidebarMutation("/chat", "POST");
     return response;
   },
   documents: (unitId: string) => fetchQuery(`documents:${unitId}`, () => request<DocumentItem[]>(`/documents?unit_id=${encodeURIComponent(unitId)}`)),
@@ -223,7 +298,12 @@ export const api = {
     new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
-      xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error("The file could not be uploaded to storage. Please try again."));
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          notifySidebarMutation("/documents", "POST");
+          resolve();
+        } else reject(new Error("The file could not be uploaded to storage. Please try again."));
+      };
       xhr.onerror = () => reject(new Error("The file could not be uploaded to storage. Please try again."));
       xhr.open("PUT", uploadUrl);
       xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
@@ -244,7 +324,11 @@ export const api = {
     return new Promise((resolve, reject) => {
       xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) { resolve(JSON.parse(xhr.responseText) as { id: string }); return; }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          notifySidebarMutation("/documents", "POST");
+          resolve(JSON.parse(xhr.responseText) as { id: string });
+          return;
+        }
         let message = "Upload failed. Please try again.";
         try {
           const body = JSON.parse(xhr.responseText) as { detail?: unknown; message?: string };

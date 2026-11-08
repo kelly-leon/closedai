@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -7,7 +8,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 from uuid import UUID
@@ -173,6 +174,86 @@ def test_bootstrap_is_user_scoped_and_has_stable_shape(monkeypatch) -> None:
         assert "Other chat" not in [item["title"] for item in response.json()["conversations"]]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_bootstrap_unchanged_state_uses_four_reads_and_no_writes(monkeypatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mode", "hosted")
+    monkeypatch.setattr(settings, "auth_provider", "supabase")
+    monkeypatch.setattr(settings, "supabase_url", "https://project.supabase.co")
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "test-shared-secret-that-is-long-enough")
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    from app.db.models import Base, Conversation, Document, Chunk, Unit, User, UserPlan
+    Base.metadata.create_all(engine, tables=[
+        User.__table__, Unit.__table__, Document.__table__, Chunk.__table__,
+        Conversation.__table__, UserPlan.__table__,
+    ])
+    user_id = uuid4()
+    with Session(engine) as db:
+        db.add_all([
+            User(id=user_id, email="user@example.com", full_name="First User"),
+            Unit(user_id=user_id, name="General"),
+            UserPlan(
+                user_id=user_id,
+                plan="trial",
+                message_quota=0,
+                document_quota=settings.trial_documents,
+                messages_used=0,
+                token_balance=0,
+                trial_tokens_used=0,
+                trial_period_start=datetime.utcnow(),
+                daily_count=0,
+            ),
+        ])
+        db.commit()
+
+    def db_session():
+        with Session(engine) as db:
+            yield db
+
+    payload = claims(user_id, user_metadata={"full_name": "First User"})
+    token = jwt.encode(payload, settings.supabase_jwt_secret, algorithm="HS256")
+    from app.db.metrics import after_cursor_execute, before_cursor_execute, handle_cursor_error
+
+    counts = {"queries": 0, "writes": 0}
+    statements = []
+
+    def count_query(_conn, _cursor, statement, _params, _context, _executemany):
+        counts["queries"] += 1
+        statements.append(statement.strip())
+        if statement.lstrip().split(None, 1)[0].upper() in {"INSERT", "UPDATE", "DELETE"}:
+            counts["writes"] += 1
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    event.listen(engine, "after_cursor_execute", after_cursor_execute)
+    event.listen(engine, "handle_error", handle_cursor_error)
+    event.listen(engine, "before_cursor_execute", count_query)
+    from app.main import app
+    from app.db.session import get_db
+    monkeypatch.setattr("app.api_documents.get_auth_provider", lambda: SupabaseAuthProvider())
+    app.dependency_overrides[get_db] = db_session
+    try:
+        response = TestClient(app).get("/me/bootstrap", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200
+        assert counts == {"queries": 4, "writes": 0}, statements
+        assert 'db-queries;desc="4"' in response.headers["server-timing"]
+    finally:
+        event.remove(engine, "before_cursor_execute", count_query)
+        event.remove(engine, "before_cursor_execute", before_cursor_execute)
+        event.remove(engine, "after_cursor_execute", after_cursor_execute)
+        event.remove(engine, "handle_error", handle_cursor_error)
+        app.dependency_overrides.clear()
+
+
+def test_every_response_has_server_timing() -> None:
+    from app.main import app
+
+    response = TestClient(app).get("/health")
+    assert response.status_code == 200
+    timing = response.headers["server-timing"]
+    assert "total;dur=" in timing
+    assert "db;dur=" in timing
+    assert 'db-queries;desc="0"' in timing
 
 
 def test_startup_guards(monkeypatch) -> None:

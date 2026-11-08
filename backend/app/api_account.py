@@ -55,14 +55,13 @@ def bootstrap(
 ) -> dict[str, object]:
     """Return the initial signed-in shell state in one user-scoped response."""
     response.headers["Cache-Control"] = "no-store"
-    ensure_general(db, user_id)
     units = db.scalars(select(Unit).where(Unit.user_id == user_id).order_by(Unit.created_at, Unit.name)).all()
-
-    selected: Unit | None = None
-    if unit_id is not None:
-        selected = db.scalar(select(Unit).where(Unit.id == unit_id, Unit.user_id == user_id))
-    if selected is None:
-        selected = units[0] if units else None
+    general = ensure_general(db, user_id, units)
+    if general not in units:
+        units.append(general)
+        units.sort(key=lambda unit: (unit.created_at, unit.name))
+    selected = next((unit for unit in units if unit.id == unit_id), None) if unit_id else None
+    selected = selected or (units[0] if units else None)
 
     conversations: list[dict[str, object]] = []
     if selected is not None:
@@ -73,7 +72,7 @@ def bootstrap(
         ).all()
         conversations = [{"id": str(item.id), "title": item.title, "created_at": item.created_at.isoformat()} for item in items]
 
-    user = db.get(User, user_id)
+    user = db.info.get("authenticated_user") or db.get(User, user_id)
     email = (user.email or "").strip().lower() if user else ""
     admin_emails = {item.strip().lower() for item in get_settings().admin_emails}
     return {

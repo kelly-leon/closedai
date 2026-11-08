@@ -43,6 +43,7 @@ async def current_user(credentials: HTTPAuthorizationCredentials | None = Depend
     full_name = metadata.get("full_name") if isinstance(metadata, dict) else claims.get("full_name")
     email = str(claims["email"]) if claims.get("email") else None
     if user is not None:
+        db.info["authenticated_user"] = user
         changed = False
         if email and user.email != email:
             user.email = email
@@ -54,7 +55,8 @@ async def current_user(credentials: HTTPAuthorizationCredentials | None = Depend
             db.commit()
         return user_id
     if user is None:
-        db.add(User(id=user_id, email=email, full_name=str(full_name).strip() if isinstance(full_name, str) else None))
+        user = User(id=user_id, email=email, full_name=str(full_name).strip() if isinstance(full_name, str) else None)
+        db.add(user)
         try:
             db.commit()
         except Exception:
@@ -65,6 +67,7 @@ async def current_user(credentials: HTTPAuthorizationCredentials | None = Depend
             if user.email is None and claims.get("email"):
                 user.email = str(claims["email"])
                 db.commit()
+    db.info["authenticated_user"] = user
     return user_id
 
 

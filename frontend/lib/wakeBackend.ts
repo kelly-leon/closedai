@@ -1,8 +1,17 @@
-const SESSION_KEY = "closedai-backend-warmed";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 export function wakeBackend(): void {
-  if (typeof window === "undefined" || window.sessionStorage.getItem(SESSION_KEY)) return;
-  window.sessionStorage.setItem(SESSION_KEY, "1");
-  void fetch(`${API_URL.replace(/\/$/, "")}/health`, { method: "GET", credentials: "omit" }).catch(() => undefined);
+  if (typeof window === "undefined") return;
+  let bannerShown = false;
+  const timer = window.setTimeout(() => {
+    bannerShown = true;
+    window.dispatchEvent(new CustomEvent("closedai:server-waking", { detail: true }));
+  }, 2000);
+  void fetch(`${API_URL.replace(/\/$/, "")}/health`, { method: "GET", credentials: "omit", cache: "no-store" })
+    .catch(() => undefined)
+    .finally(() => {
+      window.clearTimeout(timer);
+      if (bannerShown) {
+        window.dispatchEvent(new CustomEvent("closedai:server-waking", { detail: false }));
+      }
+    });
 }

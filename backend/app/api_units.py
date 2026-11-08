@@ -2,7 +2,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.orm import Session
 
 from app.api_documents import current_user
@@ -26,20 +26,26 @@ def owned_unit(db: Session, unit_id: UUID, user_id: UUID) -> Unit:
 
 @router.get("")
 def list_units(user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) -> list[dict[str, str]]:
-    ensure_general(db, user_id)
     units = db.scalars(select(Unit).where(Unit.user_id == user_id).order_by(Unit.created_at, Unit.name)).all()
+    general = ensure_general(db, user_id, units)
+    if general not in units:
+        units.append(general)
+        units.sort(key=lambda unit: (unit.created_at, unit.name))
     return [{"id": str(unit.id), "name": unit.name} for unit in units]
 
 
-def ensure_general(db: Session, user_id: UUID) -> Unit:
-    unit = db.scalar(select(Unit).where(Unit.user_id == user_id, Unit.name == "General"))
+def ensure_general(db: Session, user_id: UUID, units: list[Unit] | None = None) -> Unit:
+    unit = next((item for item in units or () if item.name == "General"), None)
+    if unit is None and units is None:
+        unit = db.scalar(select(Unit).where(Unit.user_id == user_id, Unit.name == "General"))
     if unit is None:
         unit = Unit(id=uuid4(), user_id=user_id, name="General")
         db.add(unit)
         db.flush()
-        db.execute(Document.__table__.update().where(Document.user_id == user_id, Document.unit_id.is_(None)).values(unit_id=unit.id))
-        db.execute(Chunk.__table__.update().where(Chunk.user_id == user_id, Chunk.unit_id.is_(None)).values(unit_id=unit.id))
-        db.execute(Conversation.__table__.update().where(Conversation.user_id == user_id, Conversation.unit_id.is_(None)).values(unit_id=unit.id))
+        for model in (Document, Chunk, Conversation):
+            condition = (model.user_id == user_id) & model.unit_id.is_(None)
+            if db.scalar(select(exists().where(condition))):
+                db.execute(update(model).where(condition).values(unit_id=unit.id))
         db.commit()
     return unit
 

@@ -2,16 +2,21 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { ApiError, api, ConversationSummary, SERVER_WAKE_MESSAGE, Unit, Usage } from "../lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, api, API_URL, ConversationSummary, Unit, Usage } from "../lib/api";
 import { supabase, supabaseAuthEnabled } from "../lib/supabase";
 import { invalidateShared } from "../lib/sharedData";
 import { installQueryLifecycleListeners } from "../lib/query";
-import { BrandLoader } from "./BrandLoader";
+import { clearSidebarCache, isCurrentSidebarUnit, readSidebarCache, writeSidebarCache } from "../lib/sidebarCache";
+import { refreshSidebar, retrySidebarLoad, startSidebarLoadingDeadline } from "../lib/sidebarRetry";
+import { timingEvent, timingStart } from "../lib/timing";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [retryAvailable, setRetryAvailable] = useState(false);
   const [conversationsError, setConversationsError] = useState<ApiError | null>(null);
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -21,64 +26,213 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [redeemCode, setRedeemCode] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [userName, setUserName] = useState("");
-  const [initialError, setInitialError] = useState("");
   const [unitsError, setUnitsError] = useState<ApiError | null>(null);
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
-  const [wakingServer, setWakingServer] = useState(false);
-  const [slowLoading, setSlowLoading] = useState(false);
+  const unitIdRef = useRef("");
+  const userIdRef = useRef("");
+  const workspaceSequence = useRef(0);
+  const conversationSequence = useRef(0);
+  const selectionVersion = useRef(0);
+  const skipConversationFetch = useRef("");
+  const hasSidebarData = useRef(false);
+  const dataRef = useRef<{ units: Unit[]; conversations: ConversationSummary[]; usage: Usage | null }>({
+    units: [],
+    conversations: [],
+    usage: null,
+  });
   const pathname = usePathname();
   const router = useRouter();
   const authPage = ["/login", "/signup", "/forgot-password", "/auth/reset"].includes(pathname);
   const publicPage = pathname === "/" || pathname === "/privacy" || pathname === "/terms";
 
-  async function load() {
-    if (!unitId) return;
-    setLoading(true);
-    try {
-      setConversations(await api.conversations(unitId));
-      setConversationsError(null);
-    } catch (caught) {
-      setConversationsError(caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again."));
-    } finally { setLoading(false); }
-  }
-  async function loadWorkspace() {
-    const startedAt = Date.now();
-    setSlowLoading(false);
-    const slowTimer = window.setTimeout(() => setSlowLoading(true), 8000);
-    setInitialError("");
-    if (supabaseAuthEnabled && supabase) {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) return;
-    }
-    const saved = window.localStorage.getItem("closedai-unit-id") ?? undefined;
-    try {
-      const bootstrap = await api.bootstrap(saved);
-      setUnits(bootstrap.units);
-      setUsage(bootstrap.usage);
-      setConversations(bootstrap.conversations);
-      setUnitsError(null);
-      const selected = bootstrap.units.find(item => item.id === saved) ?? bootstrap.units[0];
-      if (selected) {
-        setUnitId(selected.id);
-        window.localStorage.setItem("closedai-unit-id", selected.id);
-      } else {
-        setUnitId("");
-        window.localStorage.removeItem("closedai-unit-id");
-      }
+  const persistSidebar = useCallback((selectedUnitId = unitIdRef.current) => {
+    if (!userIdRef.current) return;
+    writeSidebarCache(window.localStorage, userIdRef.current, {
+      ...dataRef.current,
+      selectedUnitId,
+    });
+  }, []);
+
+  const loadConversations = useCallback(async (requestedUnitId: string) => {
+    const requestId = ++conversationSequence.current;
+    setLoading(!hasSidebarData.current);
+    setRefreshing(true);
+    setReconnecting(false);
+    setConversationsError(null);
+    const cancelDeadline = startSidebarLoadingDeadline(() => {
+      if (requestId !== conversationSequence.current || !isCurrentSidebarUnit(unitIdRef.current, requestedUnitId)) return;
       setLoading(false);
-      window.clearTimeout(slowTimer);
-      if (process.env.NODE_ENV === "development") console.info(`[ClosedAI] initial shell request: ${Date.now() - startedAt}ms`);
+      setReconnecting(true);
+    }, callback => window.setTimeout(callback, 8000), timer => window.clearTimeout(timer));
+    try {
+      const items = await retrySidebarLoad(() => api.conversations(requestedUnitId), {
+        onRetry: (_error, retryCount) => {
+          timingEvent("/conversations", "retry", "retryable-error", retryCount);
+          setReconnecting(true);
+          void fetch(`${API_URL}/health`, { cache: "no-store" }).catch(() => undefined);
+        },
+      });
+      if (requestId !== conversationSequence.current || !isCurrentSidebarUnit(unitIdRef.current, requestedUnitId)) return;
+      dataRef.current = { ...dataRef.current, conversations: items };
+      setConversations(items);
+      setConversationsError(null);
+      setLoading(false);
+      setRetryAvailable(false);
+      setReconnecting(false);
+      hasSidebarData.current = true;
+      persistSidebar(requestedUnitId);
     } catch (caught) {
-      const error = caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again.");
-      setUnitsError(error);
-      setInitialError("");
-      window.clearTimeout(slowTimer);
-      window.setTimeout(() => void loadWorkspace(), 15_000);
+      if (requestId !== conversationSequence.current || !isCurrentSidebarUnit(unitIdRef.current, requestedUnitId)) return;
+      setConversationsError(caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again.", true));
+      setLoading(false);
+      setRetryAvailable(true);
+    } finally {
+      cancelDeadline();
+      if (requestId === conversationSequence.current) setRefreshing(false);
     }
-  }
+  }, [persistSidebar]);
+
+  const loadWorkspace = useCallback(async () => {
+    const sequence = ++workspaceSequence.current;
+    const selectionAtStart = selectionVersion.current;
+    let retries = 0;
+    let sessionReadyLogged = false;
+    const sessionTiming = timingStart("session ready");
+    const cancelDeadline = startSidebarLoadingDeadline(() => {
+      setLoading(false);
+      setReconnecting(true);
+    }, callback => window.setTimeout(callback, 8000), timer => window.clearTimeout(timer));
+    setRefreshing(true);
+    setReconnecting(false);
+    setRetryAvailable(false);
+    setUnitsError(null);
+    setLoading(!hasSidebarData.current);
+    try {
+      let activeUserId = "selfhosted";
+      if (supabaseAuthEnabled && supabase) {
+        const { data } = await supabase.auth.getSession();
+        if (sequence !== workspaceSequence.current) return;
+        if (!data.session?.user.id) {
+          setLoading(false);
+          setRefreshing(false);
+          sessionTiming("signed-out", 0);
+          sessionReadyLogged = true;
+          return;
+        }
+        activeUserId = data.session.user.id;
+      }
+      sessionTiming("ready", 0);
+      sessionReadyLogged = true;
+      if (userIdRef.current && userIdRef.current !== activeUserId) {
+        clearSidebarCache(window.localStorage, userIdRef.current);
+        hasSidebarData.current = false;
+      }
+      userIdRef.current = activeUserId;
+      const cached = readSidebarCache(window.localStorage, activeUserId);
+      if (cached) {
+        const cachedUsage: Usage = {
+          plan: "",
+          documents_used: cached.usage.documents_used ?? 0,
+          document_quota: cached.usage.document_quota ?? null,
+          messages_used: cached.usage.messages_used ?? null,
+          message_quota: cached.usage.message_quota ?? null,
+          expires_at: null,
+          tokens_available: cached.usage.tokens_available,
+          trial_tokens_remaining: cached.usage.trial_tokens_remaining,
+          token_balance: cached.usage.token_balance,
+          daily_used: cached.usage.daily_used,
+          daily_cap: cached.usage.daily_cap,
+        };
+        const cachedConversations = cached.conversations.map(item => ({ ...item, created_at: "" }));
+        dataRef.current = { units: cached.units, conversations: cachedConversations, usage: cachedUsage };
+        setUnits(cached.units);
+        setConversations(cachedConversations);
+        setUsage(cachedUsage);
+        setConversationsError(null);
+        setLoading(false);
+        hasSidebarData.current = true;
+        if (cached.selectedUnitId) {
+          unitIdRef.current = cached.selectedUnitId;
+          skipConversationFetch.current = cached.selectedUnitId;
+          setUnitId(cached.selectedUnitId);
+        }
+      }
+      const selectedBeforeRequest = unitIdRef.current
+        || cached?.selectedUnitId
+        || window.localStorage.getItem("closedai-unit-id")
+        || "";
+      await refreshSidebar(
+        cached,
+        () => api.bootstrap(selectedBeforeRequest || undefined),
+        () => {},
+        bootstrap => {
+          if (sequence !== workspaceSequence.current) return;
+          const currentUnit = bootstrap.units.find(item => item.id === unitIdRef.current);
+          const requestedUnit = bootstrap.units.find(item => item.id === selectedBeforeRequest);
+          const userChangedUnit = selectionVersion.current !== selectionAtStart;
+          const selected = userChangedUnit
+            ? currentUnit ?? bootstrap.units[0]
+            : requestedUnit ?? bootstrap.units[0];
+          const hasRequestedConversations = selected?.id === selectedBeforeRequest
+            || !bootstrap.units.some(unit => unit.id === selectedBeforeRequest);
+          dataRef.current = {
+            units: bootstrap.units,
+            conversations: hasRequestedConversations
+              ? bootstrap.conversations.map(item => ({ ...item, created_at: item.created_at ?? "" }))
+              : [],
+            usage: bootstrap.usage,
+          };
+          setUnits(bootstrap.units);
+          setUsage(bootstrap.usage);
+          if (selected) {
+            unitIdRef.current = selected.id;
+            skipConversationFetch.current = hasRequestedConversations ? selected.id : "";
+            setUnitId(selected.id);
+            window.localStorage.setItem("closedai-unit-id", selected.id);
+          } else {
+            unitIdRef.current = "";
+            setUnitId("");
+            window.localStorage.removeItem("closedai-unit-id");
+          }
+          if (hasRequestedConversations) {
+            setConversations(bootstrap.conversations);
+            setConversationsError(null);
+          } else if (selected) {
+            setConversations([]);
+            void loadConversations(selected.id);
+          }
+          hasSidebarData.current = true;
+          setUnitsError(null);
+          setLoading(false);
+          setReconnecting(false);
+          persistSidebar(selected?.id ?? "");
+        },
+        {
+          onRetry: () => {
+            retries += 1;
+            timingEvent("/me/bootstrap", "retry", "retryable-error", retries);
+            setReconnecting(true);
+            void fetch(`${API_URL}/health`, { cache: "no-store" }).catch(() => undefined);
+          },
+        },
+      );
+      if (sequence === workspaceSequence.current) setRetryAvailable(false);
+    } catch (caught) {
+      if (sequence !== workspaceSequence.current) return;
+      const error = caught instanceof ApiError ? caught : new ApiError("We couldn't load this. Try again.", true);
+      if (!sessionReadyLogged) sessionTiming(error.code ?? "error", 0);
+      setUnitsError(error);
+      setLoading(false);
+      setRetryAvailable(true);
+      setReconnecting(false);
+    } finally {
+      cancelDeadline();
+      if (sequence === workspaceSequence.current) setRefreshing(false);
+    }
+  }, [loadConversations, persistSidebar]);
 
   useEffect(() => {
     if (authPage || (supabaseAuthEnabled && publicPage)) return;
@@ -92,47 +246,114 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     void loadWorkspace();
     const refresh = (event: Event) => {
       const detail = (event as CustomEvent<ConversationSummary>).detail;
-      if (detail) setConversations(current => current.some(item => item.id === detail.id) ? current : [detail, ...current]);
+      if (detail) {
+        const current = dataRef.current.conversations;
+        const next = current.some(item => item.id === detail.id) ? current : [detail, ...current];
+        dataRef.current = { ...dataRef.current, conversations: next };
+        setConversations(next);
+        persistSidebar();
+      }
     };
     window.addEventListener("closedai:conversation-created", refresh);
-    const wake = (event: Event) => setWakingServer((event as CustomEvent<boolean>).detail);
+    const invalidated = () => void loadWorkspace();
+    const userChanged = () => {
+      hasSidebarData.current = false;
+      dataRef.current = { units: [], conversations: [], usage: null };
+      unitIdRef.current = "";
+      setUnits([]);
+      setConversations([]);
+      setUsage(null);
+      setUnitId("");
+      void loadWorkspace();
+    };
+    const signedOut = () => {
+      if (userIdRef.current) clearSidebarCache(window.localStorage, userIdRef.current);
+      userIdRef.current = "";
+      hasSidebarData.current = false;
+      unitIdRef.current = "";
+      dataRef.current = { units: [], conversations: [], usage: null };
+      setUnits([]);
+      setConversations([]);
+      setUsage(null);
+      setUnitId("");
+    };
+    const wake = (event: Event) => {
+      if (!(event as CustomEvent<boolean>).detail) void loadWorkspace();
+    };
+    window.addEventListener("closedai:sidebar-invalidated", invalidated);
+    window.addEventListener("closedai:user-changed", userChanged);
+    window.addEventListener("closedai:signed-out", signedOut);
     window.addEventListener("closedai:server-waking", wake);
+    window.addEventListener("focus", invalidated);
+    window.addEventListener("online", invalidated);
+    const visibility = () => { if (document.visibilityState === "visible") invalidated(); };
+    document.addEventListener("visibilitychange", visibility);
     return () => {
       window.removeEventListener("closedai:conversation-created", refresh);
+      window.removeEventListener("closedai:sidebar-invalidated", invalidated);
+      window.removeEventListener("closedai:user-changed", userChanged);
+      window.removeEventListener("closedai:signed-out", signedOut);
       window.removeEventListener("closedai:server-waking", wake);
+      window.removeEventListener("focus", invalidated);
+      window.removeEventListener("online", invalidated);
+      document.removeEventListener("visibilitychange", visibility);
     };
-  }, []);
+  }, [authPage, publicPage, loadWorkspace, persistSidebar]);
 
   useEffect(() => {
     if (!unitId) return;
+    unitIdRef.current = unitId;
     window.localStorage.setItem("closedai-unit-id", unitId);
-    void load();
+    const changed = skipConversationFetch.current === unitId;
+    skipConversationFetch.current = "";
+    if (!changed) void loadConversations(unitId);
     window.dispatchEvent(new CustomEvent("closedai:unit-changed", { detail: unitId }));
+  }, [unitId, loadConversations]);
+
+  useEffect(() => {
+    if (!unitId) return;
+    const timer = window.setTimeout(() => {
+      void api.documents(unitId).catch(() => undefined);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [unitId]);
 
   if (authPage || (supabaseAuthEnabled && publicPage)) return <>{children}</>;
 
-  async function refreshUnits() {
-    const items = await api.units();
-    setUnits(items);
-    if (!items.some(item => item.id === unitId) && items[0]) setUnitId(items[0].id);
-  }
   async function createUnit() {
     const name = window.prompt("Unit name"); if (!name?.trim()) return;
-    const unit = await api.createUnit(name.trim()); await refreshUnits(); setUnitId(unit.id);
+    const unit = await api.createUnit(name.trim());
+    const nextUnits = [...dataRef.current.units, unit];
+    dataRef.current = { ...dataRef.current, units: nextUnits };
+    setUnits(nextUnits);
+    selectUnit(unit.id);
   }
   async function renameUnit() {
     const unit = units.find(item => item.id === unitId); if (!unit) return;
     const name = window.prompt("Rename unit", unit.name); if (!name?.trim()) return;
-    await api.renameUnit(unit.id, name.trim()); await refreshUnits();
+    const renamed = await api.renameUnit(unit.id, name.trim());
+    const nextUnits = dataRef.current.units.map(item => item.id === renamed.id ? renamed : item);
+    dataRef.current = { ...dataRef.current, units: nextUnits };
+    setUnits(nextUnits);
+    persistSidebar();
   }
   async function deleteUnit() {
     const unit = units.find(item => item.id === unitId); if (!unit || !window.confirm(`Delete ${unit.name} and all of its content?`)) return;
-    await api.deleteUnit(unit.id); setUnitId(""); await refreshUnits();
+    await api.deleteUnit(unit.id);
+    const nextUnits = dataRef.current.units.filter(item => item.id !== unit.id);
+    dataRef.current = { ...dataRef.current, units: nextUnits, conversations: [] };
+    setUnits(nextUnits);
+    selectUnit("");
   }
   async function redeem() {
     if (!redeemCode.trim()) return;
-    try { await api.redeem(redeemCode.trim()); setRedeemCode(""); setUsage(await api.usage()); } catch (error) { window.alert(error instanceof Error ? error.message : "Invalid code."); }
+    try {
+      const updatedUsage = await api.redeem(redeemCode.trim());
+      dataRef.current = { ...dataRef.current, usage: updatedUsage };
+      setUsage(updatedUsage);
+      setRedeemCode("");
+      persistSidebar();
+    } catch (error) { window.alert(error instanceof Error ? error.message : "Invalid code."); }
   }
 
   async function deleteAccount() {
@@ -141,6 +362,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setDeleteError("");
     try {
       await api.deleteAccount();
+      if (userIdRef.current) clearSidebarCache(window.localStorage, userIdRef.current);
       try { await supabase?.auth.signOut(); } catch { /* local cleanup still completes after deletion. */ }
       window.localStorage.clear();
       router.replace("/?deleted=success");
@@ -168,17 +390,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   async function remove(id: string) {
     if (!window.confirm("Delete this conversation?")) return;
     await api.deleteConversation(id);
-    await load();
     if (pathname.includes(id)) router.push(supabaseAuthEnabled ? "/app" : "/");
   }
 
+  function selectUnit(id: string) {
+    selectionVersion.current += 1;
+    unitIdRef.current = id;
+    dataRef.current = { ...dataRef.current, conversations: [] };
+    setConversations([]);
+    setConversationsError(null);
+    setUnitId(id);
+    persistSidebar(id);
+  }
+
   const rail = collapsed;
-  if (initialError) return <main className="relative z-10 flex h-screen items-center justify-center bg-slate-950 px-5 text-center text-white"><div><p role="alert" className="max-w-md text-slate-200">{initialError}</p><button type="button" onClick={() => void loadWorkspace()} className="mt-4 rounded-lg bg-sky-300 px-4 py-2 font-semibold text-slate-950">Retry</button></div></main>;
   return <div className="app-shell relative z-10 flex h-screen overflow-hidden text-slate-100 supports-[height:100dvh]:h-dvh">
-    {wakingServer && <div role="status" className="fixed inset-x-0 top-3 z-[100] mx-auto flex w-fit items-center gap-3 rounded-xl border border-sky-300/20 bg-slate-900/95 px-4 py-3 text-sm text-slate-100 shadow-xl">
-      <BrandLoader className="brand-loader-small" />
-      <span>{SERVER_WAKE_MESSAGE}</span>
-    </div>}
     <header className="app-mobile-bar md:hidden">
       <button onClick={() => setOpen(!open)} aria-label="Toggle navigation">☰</button>
       <Link href="/" className="app-mobile-home" onClick={() => setOpen(false)}><span aria-hidden="true">⌂</span> Home</Link>
@@ -186,7 +412,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <aside className={`app-sidebar ${open ? "translate-x-0" : "-translate-x-full"} fixed inset-y-0 left-0 z-40 flex h-full w-72 shrink-0 flex-col overflow-hidden text-slate-100 transition-[transform,width] duration-300 md:static md:translate-x-0 ${rail ? "md:w-16" : "md:w-72"}`}>
       <div className={`shrink-0 p-3 ${rail ? "md:px-2" : ""}`}>
         {!rail && <div className="mb-3 flex gap-1">
-          <select value={unitId} onChange={event => setUnitId(event.target.value)} aria-label="Unit" className="min-w-0 flex-1 rounded-lg border border-white/15 bg-slate-950 px-3 py-2 text-sm">
+          <select value={unitId} onChange={event => selectUnit(event.target.value)} aria-label="Unit" className="min-w-0 flex-1 rounded-lg border border-white/15 bg-slate-950 px-3 py-2 text-sm">
             {units.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
           </select>
           <button onClick={() => void createUnit()} title="Create unit" className="rounded-lg bg-white/10 px-2">+</button>
@@ -207,12 +433,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {!rail && <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" aria-label="Conversations">
         <p className="px-2 text-xs font-semibold uppercase tracking-wide text-slate-300 [text-shadow:_0_1px_3px_rgba(0,0,0,0.9)]">Chats</p>
         {loading && <div className="mt-2 h-10 animate-pulse rounded-lg bg-slate-600/30" />}
-        {loading && slowLoading && <div className="px-2 py-3 text-sm text-slate-300"><p>Still loading...</p><button type="button" onClick={() => void loadWorkspace()} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
-        {!loading && conversationsError && <div role="alert" className="px-2 py-4 text-sm text-red-200"><p>We couldn't load this. Try again.{conversationsError.requestId ? ` Request ID: ${conversationsError.requestId}` : ""}</p><button type="button" onClick={() => void load()} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
+        {refreshing && !reconnecting && <p role="status" className="px-2 pt-2 text-xs text-slate-300">Refreshing…</p>}
+        {reconnecting && <p role="status" className="px-2 pt-2 text-xs text-amber-200">Reconnecting…</p>}
+        {retryAvailable && <button type="button" onClick={() => void loadWorkspace()} className="mx-2 mt-2 rounded bg-white px-3 py-1.5 text-sm font-semibold text-slate-950">Retry</button>}
+        {!loading && conversationsError && <div role="alert" className="px-2 py-4 text-sm text-red-200"><p>We couldn't load this. Try again.{conversationsError.requestId ? ` Request ID: ${conversationsError.requestId}` : ""}</p><button type="button" onClick={() => void loadConversations(unitId)} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
         {unitsError && !loading && <div role="alert" className="px-2 py-4 text-sm text-red-200"><p>Couldn't load your units. Retry</p>{unitsError.requestId && <p className="mt-1">Request ID: {unitsError.requestId}</p>}<button type="button" onClick={() => void loadWorkspace()} className="mt-2 rounded bg-white px-3 py-1.5 font-semibold text-slate-950">Retry</button></div>}
         {!loading && !conversationsError && !unitsError && conversations.length === 0 && <p className="px-2 py-4 text-sm text-slate-300">No conversations yet.</p>}
         {conversations.map(item => <div key={item.id} className={`app-conversation group mt-1 flex items-center ${pathname === `/chat/${item.id}` ? "active text-white" : "text-slate-200"}`}>
-          <Link href={`/chat/${item.id}`} onClick={() => setOpen(false)} className="min-w-0 flex-1 truncate px-3 py-2 text-sm text-slate-100">{item.title}</Link>
+          <Link href={`/chat/${item.id}`} onClick={() => setOpen(false)} onMouseEnter={() => { void api.conversation(item.id).catch(() => undefined); }} onTouchStart={() => { void api.conversation(item.id).catch(() => undefined); }} className="min-w-0 flex-1 truncate px-3 py-2 text-sm text-slate-100">{item.title}</Link>
           <button onClick={() => void remove(item.id)} className="invisible px-2 text-slate-300 group-hover:visible" aria-label={`Delete ${item.title}`}>×</button>
         </div>)}
       </nav>}
@@ -236,7 +464,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="truncate text-white">{userName || userEmail}</span>
             <div className="flex gap-2">
               <button onClick={() => { setDeleteDialog(true); setDeleteConfirmation(""); setDeleteError(""); }} className="rounded px-2 py-1 text-red-300 hover:bg-red-950/40">Delete my account</button>
-              <button onClick={async () => { await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); sessionStorage.removeItem("closedai-last-chat"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
+              <button onClick={async () => { if (userIdRef.current) clearSidebarCache(window.localStorage, userIdRef.current); await supabase?.auth.signOut(); window.localStorage.removeItem("closedai-unit-id"); sessionStorage.removeItem("closedai-last-chat"); router.replace("/login"); }} className="rounded bg-white/10 px-2 py-1 hover:bg-white/15">Sign out</button>
             </div>
           </div>
       </div>}

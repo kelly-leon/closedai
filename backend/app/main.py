@@ -6,6 +6,7 @@ import threading
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 from alembic.config import Config
@@ -26,6 +27,7 @@ from app.api_units import router as units_router
 from app.api_billing import router as billing_router
 from app.api_account import router as account_router
 from app.db.models import Unit
+from app.db.metrics import DatabaseMetrics, current_database_metrics
 from app.rate_limit import rate_limit
 from app.notify import notifier_startup_name
 from app.mailer import mailer_startup_name
@@ -119,6 +121,13 @@ async def request_logging_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid4()))
     request.state.request_id = request_id
     token = request_id_context.set(request_id)
+    metrics = DatabaseMetrics()
+    metrics_token = current_database_metrics.set(metrics)
+    started = perf_counter()
+    request.state.database_metrics = metrics
+    request.state.request_started = started
+    request.state.request_elapsed_ms = 0.0
+    response = None
     try:
         if request.url.path in {"/documents/upload-url", "/documents/register"} and not request.headers.get("Authorization"):
             rate_limit(
@@ -129,6 +138,12 @@ async def request_logging_middleware(request: Request, call_next):
             )
         response = await call_next(request)
     finally:
+        elapsed_ms = (perf_counter() - started) * 1000
+        request.state.request_elapsed_ms = elapsed_ms
+        if response is not None:
+            response.headers["Server-Timing"] = server_timing(metrics, elapsed_ms)
+            log_slow_request(request, elapsed_ms, metrics)
+        current_database_metrics.reset(metrics_token)
         request_id_context.reset(token)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -152,7 +167,29 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["DELETE", "GET", "POST", "PUT", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["Server-Timing", "X-Request-ID"],
 )
+
+
+def server_timing(metrics: DatabaseMetrics, elapsed_ms: float) -> str:
+    return (
+        f"total;dur={elapsed_ms:.2f}, db;dur={metrics.query_ms:.2f}, "
+        f'db-queries;desc="{metrics.query_count}"'
+    )
+
+
+def log_slow_request(request: Request, elapsed_ms: float, metrics: DatabaseMetrics) -> None:
+    if elapsed_ms < 1500 or getattr(request.state, "slow_request_logged", False):
+        return
+    request.state.slow_request_logged = True
+    logging.getLogger("closedai.request").warning(
+        "slow request path=%s ms=%.2f db_ms=%.2f db_queries=%s",
+        request.url.path,
+        elapsed_ms,
+        metrics.query_ms,
+        metrics.query_count,
+        extra={"request_id": getattr(request.state, "request_id", "")},
+    )
 
 
 @app.exception_handler(HTTPException)
@@ -178,7 +215,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         request_id,
         extra={"request_id": request_id},
     )
-    headers = {"X-Request-ID": request_id}
+    metrics = getattr(request.state, "database_metrics", DatabaseMetrics())
+    elapsed_ms = getattr(request.state, "request_elapsed_ms", 0.0)
+    headers = {
+        "X-Request-ID": request_id,
+        "Server-Timing": server_timing(metrics, elapsed_ms),
+    }
+    log_slow_request(request, elapsed_ms, metrics)
     origin = request.headers.get("origin")
     if origin and ("*" in settings.cors_origins or origin in settings.cors_origins):
         headers["Access-Control-Allow-Origin"] = origin if "*" not in settings.cors_origins else "*"

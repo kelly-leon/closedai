@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.api_documents import current_user
 from app.auth.factory import get_auth_provider
 from app.config import get_settings
-from app.db.models import AuditLog, Package, PaymentRequest, RedeemCode, User, UserPlan, UsageEvent
+from app.db.models import AuditLog, Document, Package, PaymentRequest, RedeemCode, User, UserPlan, UsageEvent
 from app.db.session import get_db
 from app.mailer import mailer_configured, mailer_status, send_email, send_email_detail, send_email_result
 from app.notify import configured_providers, notify_payment, send_notification
@@ -399,11 +399,28 @@ def usage(user_id: UUID = Depends(current_user), db: Session = Depends(get_db)) 
         return {"plan": "unlimited", "tokens_available": None, "trial_tokens_remaining": None, "trial_resets_at": None,
                 "token_balance": None, "premium_until": None, "daily_used": None, "daily_cap": None,
                 "documents_used": 0, "document_quota": None}
-    plan = apply_weekly_reset(db, ensure_plan(db, user_id))
+    document_count = (
+        select(func.count())
+        .select_from(Document)
+        .where(
+            Document.user_id == user_id,
+            Document.status.in_(["pending", "processing", "ready"]),
+        )
+        .scalar_subquery()
+    )
+    row = db.execute(
+        select(UserPlan, document_count.label("documents_used"))
+        .where(UserPlan.user_id == user_id)
+    ).one_or_none()
+    if row is None:
+        plan = ensure_plan(db, user_id)
+        used = documents_used(db, user_id)
+    else:
+        plan, used = row
+    plan = apply_weekly_reset(db, plan)
     premium = plan.premium_until is not None and plan.premium_until > datetime.utcnow()
     if premium:
         apply_daily_reset(db, plan)
-    used = documents_used(db, user_id)
     quota = settings.premium_documents if premium else (settings.paid_documents if plan.has_purchased else settings.trial_documents)
     return {"plan": "premium" if premium else ("paid" if plan.has_purchased else "trial"),
             "tokens_available": trial_remaining(plan) + plan.token_balance,

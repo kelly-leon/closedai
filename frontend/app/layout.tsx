@@ -3,6 +3,7 @@ import { AppShell } from "../components/AppShell";
 import { SpaceBackground } from "../components/SpaceBackground";
 import { Figtree, Fraunces } from "next/font/google";
 import { AuthGuard } from "../components/AuthGuard";
+import { ServerWakeBanner } from "../components/ServerWakeBanner";
 
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-figtree" });
 const fraunces = Fraunces({ subsets: ["latin"], variable: "--font-fraunces", style: ["normal", "italic"] });
@@ -22,7 +23,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className="dark">
-      <body suppressHydrationWarning className={`${figtree.variable} ${fraunces.variable} h-full`}><AuthGuard><SpaceBackground /><AppShell>{children}</AppShell></AuthGuard></body>
+      <body suppressHydrationWarning className={`${figtree.variable} ${fraunces.variable} h-full`}><AuthGuard><SpaceBackground /><ServerWakeBanner /><AppShell>{children}</AppShell></AuthGuard></body>
     </html>
   );
 }
